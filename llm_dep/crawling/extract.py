@@ -21,14 +21,33 @@ class CallSiteMatcher(APIMatcher):
     also counts as a use of a class API `Cls` (it builds the object through `cls(**config)`)."""
 
     def __init__(self, code, apis, indexer_apis=(), maxline=1000, infer_types=False, from_pretrained=False,
-                 original=None):
+                 original=None, package=None):
         super().__init__(code, set(apis) | set(indexer_apis), maxline=maxline)
         self.indexer_apis = set(indexer_apis)
         self.infer_types = infer_types
         self.from_pretrained = from_pretrained
         self.original = original          # lines of the Python 2 source that `code` (its lib2to3 translation) came from
+        self.package = package            # dotted package of the file (`package_of`): resolves `from . import x`
         self.tree = None                  # stays None when the code is not valid Python 3
         self.sites: List[dict] = []
+
+    def solve_imports(self):
+        """APIMatcher.solve_imports, plus relative imports (`from . import utils`, `from ..utils import despine`)
+        resolved against `self.package`; without it they stay unresolved as before."""
+        super().solve_imports()
+        if not self.package:
+            return
+        pkg = self.package.split(".")
+        for node in ast.walk(self.tree):
+            if not isinstance(node, ast.ImportFrom) or not node.level or node.level > len(pkg):
+                continue
+            base = ".".join(pkg[:len(pkg) - node.level + 1])
+            mod = f"{base}.{node.module}" if node.module else base
+            for nn in node.names:
+                if nn.name == "*":
+                    self.import_dict[mod] = mod
+                else:
+                    self.import_dict[nn.asname or nn.name] = f"{mod}.{nn.name}"
 
     def _resolve(self, name: str, ref_dict: dict) -> str:
         parts = name.split(".")
@@ -174,9 +193,24 @@ def _py2to3(code: str) -> Optional[str]:
         return None
 
 
-def _match(code: str, apis, indexer_apis, infer_types, from_pretrained, original=None) -> Optional[CallSiteMatcher]:
+def package_of(path: Optional[str], tops: Iterable[str]) -> Optional[str]:
+    """Dotted package of the file at repository `path`, from the last directory named like one of the libraries
+    `tops` (`src/seaborn/tests/test_utils.py` -> `seaborn.tests`); None if no such directory, i.e. the file is not a
+    copy of the library's own source, so its relative imports refer to some other package."""
+    if not path:
+        return None
+    dirs = path.replace("\\", "/").split("/")[:-1]
+    for i in range(len(dirs) - 1, -1, -1):
+        if dirs[i] in tops:
+            rest = dirs[i:]
+            return ".".join(rest) if all(d.isidentifier() for d in rest) else None
+    return None
+
+
+def _match(code: str, apis, indexer_apis, infer_types, from_pretrained, original=None,
+           package=None) -> Optional[CallSiteMatcher]:
     m = CallSiteMatcher(code, apis, indexer_apis, infer_types=infer_types, from_pretrained=from_pretrained,
-                        original=original)
+                        original=original, package=package)
     try:
         return m.match()
     except (RecursionError, IndexError, ValueError):
@@ -184,11 +218,13 @@ def _match(code: str, apis, indexer_apis, infer_types, from_pretrained, original
 
 
 def extract_sites(code: str, apis: Iterable[str], indexer_apis: Iterable[str] = (),
-                  infer_types: bool = False, from_pretrained: bool = False) -> List[Dict]:
+                  infer_types: bool = False, from_pretrained: bool = False, path: Optional[str] = None) -> List[Dict]:
     """Call sites of `apis` in `code`. A file that is not valid Python 3 (Python 2) is translated with lib2to3
-    to find the sites; their text is then taken from the original lines (`CallSiteMatcher._original_lines`)."""
+    to find the sites; their text is then taken from the original lines (`CallSiteMatcher._original_lines`).
+    `path` (repository path of the file) lets relative imports inside a copy of the library resolve (`package_of`)."""
     apis, indexer_apis = set(apis), set(indexer_apis)
-    m = _match(code, apis, indexer_apis, infer_types, from_pretrained)
+    package = package_of(path, {a.split(".", 1)[0] for a in apis | indexer_apis})
+    m = _match(code, apis, indexer_apis, infer_types, from_pretrained, package=package)
     if m is None:
         return []
     if m.tree is not None:
@@ -201,5 +237,5 @@ def extract_sites(code: str, apis: Iterable[str], indexer_apis: Iterable[str] = 
     new = _py2to3(text)
     if new is None or new.count("\n") != text.count("\n"):    # line count changed (fix_tuple_params): no 1:1 map
         return []
-    m = _match(new, apis, indexer_apis, infer_types, from_pretrained, original=text.split("\n"))
+    m = _match(new, apis, indexer_apis, infer_types, from_pretrained, original=text.split("\n"), package=package)
     return [] if m is None or m.tree is None else m.sites

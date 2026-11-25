@@ -193,7 +193,7 @@ class Crawler:
                 return "download_failed", [], None
             sites = [s for s in extract_sites(code, [target], self.indexer_apis & {target},
                                                 infer_types=self.args.infer_types and lib == "pandas",
-                                                from_pretrained=self.args.allow_from_pretrained)
+                                                from_pretrained=self.args.allow_from_pretrained, path=hit.path)
                      if s["matched api"] == target]
             if not sites:
                 return "no_call_site", [], None

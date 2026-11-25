@@ -32,7 +32,7 @@ from typing import Dict, List, Set, Tuple
 from packaging.version import Version
 
 from . import net
-from .evolution import LIBS, Evolution
+from .evolution import LIBS, USABLE, Evolution
 from .extract import extract_sites
 from .github import GitHub
 from .github_search import GitHubSearch, gh_queries
@@ -192,7 +192,9 @@ class Crawler:
             if code is None:
                 return "download_failed", [], None
             sites = [s for s in extract_sites(code, [target], self.indexer_apis & {target},
-                                                infer_types=self.args.infer_types and lib == "pandas") if s["matched api"] == target]
+                                                infer_types=self.args.infer_types and lib == "pandas",
+                                                from_pretrained=self.args.allow_from_pretrained)
+                     if s["matched api"] == target]
             if not sites:
                 return "no_call_site", [], None
             sites = [s for s in sites if func_key(s["function"]) not in self.seen_funcs]
@@ -228,6 +230,15 @@ class Crawler:
             self.stats[f"accepted_{kind}"] += 1
             out.write(json.dumps(self._sample(kind, target, paths, site, hit, res, assignments, query)) + "\n")
 
+    @staticmethod
+    def _binds(site, target, state, lenient_starred=False):
+        """Does the call bind to the API at this state? `Cls.from_pretrained(...)` takes
+        (pretrained_model_name_or_path, **kwargs), not the constructor signature: it binds
+        wherever the class exists."""
+        if site.get("call form") == "from_pretrained":
+            return state is not None and state.status in USABLE
+        return compatible(site["api_call"], target, state, lenient_starred=lenient_starred)
+
     def _place(self, res, p, target):
         return place(res, p, self.args.mode, api=target, signature_only=self.args.unchanged == "signature",
                      require_bounded=not self.args.allow_unbounded)
@@ -240,7 +251,7 @@ class Crawler:
             if pl.status != "ok":
                 reasons.append(pl.status)
                 continue
-            checks = [compatible(site["api_call"], target, p.state(ms, target)) for ms in pl.milestones]
+            checks = [self._binds(site, target, p.state(ms, target)) for ms in pl.milestones]
             if self.args.allow_undecidable:
                 checks = [p.feasible(kind, ms) if ok is None else ok for ms, ok in zip(pl.milestones, checks)]
             if all(ok is True for ok in checks):
@@ -256,7 +267,7 @@ class Crawler:
         `**kwargs` bind unless their explicit part fails, as in the original O/U data."""
         assignments, reasons = [], []
         for p in paths:
-            checks = {ms: compatible(site["api_call"], target, p.state(ms, target), lenient_starred=True)
+            checks = {ms: self._binds(site, target, p.state(ms, target), lenient_starred=True)
                       for ms in p.milestones}
             if None in checks.values():           # unparsable call
                 reasons.append("signature_undecidable")
@@ -344,6 +355,8 @@ def main():
     ap.add_argument("--no-targeted", action="store_true", help="skip dependency-targeted queries")
     ap.add_argument("--no-commit-date", action="store_true", help="do not filter releases by commit date")
     ap.add_argument("--allow-undecidable", action="store_true", help="accept calls with *args/**kwargs")
+    ap.add_argument("--allow-from-pretrained", action="store_true",
+                    help="also count `Cls.from_pretrained(...)` as a use of a class API `Cls`")
     ap.add_argument("--include-vendored", action="store_true", help="keep files under site-packages/, venv/ ...")
     ap.add_argument("--wait-on-block", type=int, default=0,
                     help="when Sourcegraph blocks searches, sleep this many minutes and resume (0 = exit)")

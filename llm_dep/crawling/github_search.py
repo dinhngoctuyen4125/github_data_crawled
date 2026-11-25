@@ -55,6 +55,8 @@ def gh_queries(api: str, method_only: bool = False) -> List[str]:
                 queries.append(f'"{top}" {parts[-1]} language:python')
         else:                                                                          # function / class
             queries.append(f'"{".".join(parts[:-1])}" {parts[-1]} language:python')
+            if len(parts) >= 3:                                                        # `from pkg import module; module.name(`
+                queries.append(f'"{parts[-2]}.{parts[-1]}" language:python')
     return list(dict.fromkeys(queries))
 
 

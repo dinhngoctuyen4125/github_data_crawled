@@ -15,12 +15,14 @@ from .pandas_types import PandasTypes
 class CallSiteMatcher(APIMatcher):
     """APIMatcher that keeps the earliest matching call of each function (so the prompt never
     contains the target API), records the exact call source, and also matches indexer access
-    such as `df.loc[...]` for APIs in `indexer_apis`."""
+    such as `df.loc[...]` for APIs in `indexer_apis`. With `from_pretrained`, `Cls.from_pretrained(...)`
+    also counts as a use of a class API `Cls` (it builds the object through `cls(**config)`)."""
 
-    def __init__(self, code, apis, indexer_apis=(), maxline=1000, infer_types=False):
+    def __init__(self, code, apis, indexer_apis=(), maxline=1000, infer_types=False, from_pretrained=False):
         super().__init__(code, set(apis) | set(indexer_apis), maxline=maxline)
         self.indexer_apis = set(indexer_apis)
         self.infer_types = infer_types
+        self.from_pretrained = from_pretrained
         self.sites: List[dict] = []
 
     def _resolve(self, name: str, ref_dict: dict) -> str:
@@ -52,7 +54,13 @@ class CallSiteMatcher(APIMatcher):
             if not name:
                 continue
             wanted = self.indexer_apis if isinstance(node, ast.Subscript) else self.apis
-            api, reason = self._resolve(name, ref_dict), None
+            api, reason, form = self._resolve(name, ref_dict), None, "call"
+            if (api not in wanted and self.from_pretrained and isinstance(node, ast.Call)
+                    and isinstance(callee, ast.Attribute) and callee.attr == "from_pretrained"):
+                cls_name = self.get_source_by_node(callee.value)
+                cls_api = self._resolve(cls_name, ref_dict) if cls_name else None
+                if cls_api in wanted and cls_api.split(".")[-1][:1].isupper():
+                    api, name, form = cls_api, cls_name, "from_pretrained"
             if api not in wanted and types is not None and isinstance(callee, ast.Attribute):
                 t = types.infer(callee.value, node.lineno)      # e.g. df <- pd.read_csv(...)
                 if t:
@@ -61,7 +69,7 @@ class CallSiteMatcher(APIMatcher):
                 continue
             key = (node.lineno, node.col_offset)
             if best is None or key < best[0]:
-                best = (key, node, name, api, reason)
+                best = (key, node, name, api, reason, form)
         return best
 
     def match_one_func(self, func, ref_dict):
@@ -72,8 +80,9 @@ class CallSiteMatcher(APIMatcher):
         best = self._best(func, ref_dict, func.lineno, func.end_lineno, scope=func)
         if best is None:
             return
-        _, node, name, api, reason = best
-        self._record(" " * func.col_offset + self.get_source_by_node(func), func.lineno, node, name, api, ref_dict, reason)
+        _, node, name, api, reason, form = best
+        self._record(" " * func.col_offset + self.get_source_by_node(func), func.lineno, node, name, api, ref_dict,
+                     reason, form)
 
     def match_script_stmts(self, max_stmts=5):
         block = []
@@ -88,14 +97,15 @@ class CallSiteMatcher(APIMatcher):
             best = self._best(stmt, self.global_ref_dict, stmt.lineno, stmt.end_lineno, scope=self.tree)
             if best is None:
                 continue
-            _, node, name, api, reason = best
+            _, node, name, api, reason, form = best
             first, last = block[0], block[-1]
             src = self.get_source_by_position(first.lineno - 1, first.col_offset, last.end_lineno - 1, last.end_col_offset)
-            self._record(" " * first.col_offset + src, first.lineno, node, name, api, self.global_ref_dict, reason)
+            self._record(" " * first.col_offset + src, first.lineno, node, name, api, self.global_ref_dict,
+                         reason, form)
             return
 
     def _record(self, function: str, first_lineno: int, node, call_name: str, api: str, ref_dict: dict,
-                reason=None):
+                reason=None, form="call"):
         rel = node.lineno - first_lineno
         lines = function.split("\n")
         if rel <= 0 or rel >= len(lines):
@@ -110,12 +120,13 @@ class CallSiteMatcher(APIMatcher):
             "alias dict": self.alias_dict,
             "reference dict": ref_dict,
             "type inference": reason,
+            "call form": form,
         })
 
 
 def extract_sites(code: str, apis: Iterable[str], indexer_apis: Iterable[str] = (),
-                  infer_types: bool = False) -> List[Dict]:
-    m = CallSiteMatcher(code, apis, indexer_apis, infer_types=infer_types)
+                  infer_types: bool = False, from_pretrained: bool = False) -> List[Dict]:
+    m = CallSiteMatcher(code, apis, indexer_apis, infer_types=infer_types, from_pretrained=from_pretrained)
     try:
         m.match()
     except (RecursionError, IndexError, ValueError):

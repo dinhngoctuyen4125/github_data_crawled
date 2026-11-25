@@ -1,7 +1,9 @@
 """Extract completion samples (function + prompt + reference + api_call) from a source file."""
 import ast
+import logging
+import threading
 import warnings
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 # Crawled files often contain invalid escape sequences; ast.parse would warn for each of them.
 warnings.filterwarnings("ignore", category=SyntaxWarning)
@@ -18,11 +20,14 @@ class CallSiteMatcher(APIMatcher):
     such as `df.loc[...]` for APIs in `indexer_apis`. With `from_pretrained`, `Cls.from_pretrained(...)`
     also counts as a use of a class API `Cls` (it builds the object through `cls(**config)`)."""
 
-    def __init__(self, code, apis, indexer_apis=(), maxline=1000, infer_types=False, from_pretrained=False):
+    def __init__(self, code, apis, indexer_apis=(), maxline=1000, infer_types=False, from_pretrained=False,
+                 original=None):
         super().__init__(code, set(apis) | set(indexer_apis), maxline=maxline)
         self.indexer_apis = set(indexer_apis)
         self.infer_types = infer_types
         self.from_pretrained = from_pretrained
+        self.original = original          # lines of the Python 2 source that `code` (its lib2to3 translation) came from
+        self.tree = None                  # stays None when the code is not valid Python 3
         self.sites: List[dict] = []
 
     def _resolve(self, name: str, ref_dict: dict) -> str:
@@ -104,10 +109,28 @@ class CallSiteMatcher(APIMatcher):
                          reason, form)
             return
 
+    def _original_lines(self, lines: List[str], first_lineno: int, node):
+        """`lines` of a site found in the lib2to3 translation, rebuilt from the original Python 2 source
+        (`extract_sites` only translates files whose line count lib2to3 keeps, so line i maps to line i).
+        The call's own lines must be unchanged (so `api_call` is original text); otherwise None. Unchanged lines
+        keep the matcher's cut (indent of the first line, end of the last statement); lines changed by lib2to3
+        are taken whole."""
+        c0 = first_lineno - 1
+        orig = self.original[c0:c0 + len(lines)]
+        same = [c.rstrip("\r\n") == o for c, o in zip(self.lines[c0:c0 + len(lines)], orig)]
+        if not all(same[node.lineno - first_lineno:node.end_lineno - first_lineno + 1]):
+            return None
+        return [l if s else o.rstrip() for l, s, o in zip(lines, same, orig)]
+
     def _record(self, function: str, first_lineno: int, node, call_name: str, api: str, ref_dict: dict,
                 reason=None, form="call"):
         rel = node.lineno - first_lineno
         lines = function.split("\n")
+        if self.original is not None:
+            lines = self._original_lines(lines, first_lineno, node)
+            if lines is None:
+                return
+            function = "\n".join(lines)
         if rel <= 0 or rel >= len(lines):
             return                       # call on the def line: no prompt to complete from
         self.sites.append({
@@ -124,11 +147,59 @@ class CallSiteMatcher(APIMatcher):
         })
 
 
+# lib2to3 (deprecated since 3.11, removed in 3.13) is only used to locate call sites in Python 2 files.
+# Only the fixers for Python 2 *syntax* are applied: every other fixer (e.g. fix_unicode: u"a" -> "a") rewrites
+# valid code, and a rewritten call line can no longer be mapped back to the original text.
+try:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        from lib2to3.refactor import RefactoringTool
+except ImportError:
+    RefactoringTool = None
+    logging.warning("lib2to3 is not available (Python >= 3.13): Python 2 files will yield no samples")
+PY2_SYNTAX_FIXERS = [f"lib2to3.fixes.fix_{n}" for n in (
+    "print", "except", "exec", "raise", "repr", "ne", "numliterals", "tuple_params", "paren")]
+_py2 = threading.local()                    # RefactoringTool is not thread-safe; run.py extracts in a pool
+
+
+def _py2to3(code: str) -> Optional[str]:
+    """lib2to3 translation of Python 2 source (None if it fails or lib2to3 is unavailable)."""
+    if RefactoringTool is None:
+        return None
+    if not hasattr(_py2, "tool"):
+        _py2.tool = RefactoringTool(PY2_SYNTAX_FIXERS)
+    try:
+        return str(_py2.tool.refactor_string(code, "<crawled>"))      # code ends with "\n" (extract_sites)
+    except Exception:
+        return None
+
+
+def _match(code: str, apis, indexer_apis, infer_types, from_pretrained, original=None) -> Optional[CallSiteMatcher]:
+    m = CallSiteMatcher(code, apis, indexer_apis, infer_types=infer_types, from_pretrained=from_pretrained,
+                        original=original)
+    try:
+        return m.match()
+    except (RecursionError, IndexError, ValueError):
+        return None
+
+
 def extract_sites(code: str, apis: Iterable[str], indexer_apis: Iterable[str] = (),
                   infer_types: bool = False, from_pretrained: bool = False) -> List[Dict]:
-    m = CallSiteMatcher(code, apis, indexer_apis, infer_types=infer_types, from_pretrained=from_pretrained)
-    try:
-        m.match()
-    except (RecursionError, IndexError, ValueError):
+    """Call sites of `apis` in `code`. A file that is not valid Python 3 (Python 2) is translated with lib2to3
+    to find the sites; their text is then taken from the original lines (`CallSiteMatcher._original_lines`)."""
+    apis, indexer_apis = set(apis), set(indexer_apis)
+    m = _match(code, apis, indexer_apis, infer_types, from_pretrained)
+    if m is None:
         return []
-    return m.sites
+    if m.tree is not None:
+        return m.sites
+    names = {a.rsplit(".", 1)[-1] for a in apis | indexer_apis} | ({"from_pretrained"} if from_pretrained else set())
+    if not any(n in code for n in names):   # cannot contain a site: skip the (slow) translation
+        return []
+    text = code.replace("\r\n", "\n").replace("\r", "\n")
+    text += "" if text.endswith("\n") else "\n"
+    new = _py2to3(text)
+    if new is None or new.count("\n") != text.count("\n"):    # line count changed (fix_tuple_params): no 1:1 map
+        return []
+    m = _match(new, apis, indexer_apis, infer_types, from_pretrained, original=text.split("\n"))
+    return [] if m is None or m.tree is None else m.sites

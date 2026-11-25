@@ -8,6 +8,10 @@ GitHub indexes far more public repositories than sourcegraph.com, but:
   * no regex / `repo:has.file(...)`, punctuation such as `(` is ignored: queries are by API name only;
   * only the default branch is indexed (html_url carries the commit sha of that branch).
 Every result page and every finished query are cached, so interrupted searches resume.
+A size slice that GitHub keeps answering with 5xx/408 (search timeout on very common terms) is
+split further; a slice that still fails when it is MIN_SLICE bytes wide, or that gets an unexpected
+4xx, is skipped with a warning, and the query result is then not frozen in the cache, so a later
+run retries the skipped slices.
 """
 import logging
 import math
@@ -25,7 +29,17 @@ SEARCH_URL = "https://api.github.com/search/code"
 PER_PAGE = 100
 MAX_RESULTS = 1000            # GitHub serves only the first 1000 results of a query
 MAX_SIZE = 400_000            # files above ~384 KB are not indexed
+MIN_SLICE = 4096              # narrowest size slice that is still split on persistent 5xx/408
+SERVER_RETRIES = 2            # 5xx/408 answers to one request before its slice counts as failed
 BLOB = re.compile(r"^https://github\.com/[^/]+/[^/]+/blob/([^/]+)/")
+
+
+class SliceFailed(Exception):
+    """GitHub keeps answering one query (slice) with 5xx/408: split it or skip it, do not stop."""
+
+
+class SliceRejected(SliceFailed):
+    """Unexpected 4xx for one query (slice): skip it without splitting, never cache it."""
 
 
 def gh_queries(api: str, method_only: bool = False) -> List[str]:
@@ -59,6 +73,7 @@ class GitHubSearch:
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}",
                    "X-GitHub-Api-Version": "2022-11-28"}
         backoff = 10.0
+        server_errors = 0
         for attempt in range(12):
             wait = self._last + self.min_interval - time.time()
             if wait > 0:
@@ -89,9 +104,13 @@ class GitHubSearch:
                 time.sleep(wait)
                 continue
             status = r.status_code if r is not None else err
-            if r is not None and r.status_code < 500:
+            if r is not None and r.status_code < 500 and r.status_code != 408:
                 logging.warning("github search %r -> %s: %s", q, status, r.text[:200])
-                return {"total_count": 0, "items": []}
+                raise SliceRejected(q)
+            if r is not None:                       # 5xx / 408 timeout: query too heavy for GitHub
+                server_errors += 1
+                if server_errors >= SERVER_RETRIES:
+                    raise SliceFailed(q)
             logging.warning("github search %r -> %s, retry %d in %.0fs", q, status, attempt + 1, backoff)
             time.sleep(backoff)
             backoff = min(backoff * 2, 300)
@@ -116,26 +135,38 @@ class GitHubSearch:
         return v["total"], v["items"]
 
     # ------------------------------------------------------------------ search
-    def _collect(self, q: str, lo: Optional[int], hi: Optional[int], count: int, out: Dict[tuple, Hit]):
+    def _bisect(self, q: str, lo: int, hi: int, count: int, out: Dict[tuple, Hit]) -> int:
+        mid = (lo + hi) // 2
+        return self._collect(q, lo, mid, count, out) + self._collect(q, mid + 1, hi, count, out)
+
+    def _collect(self, q: str, lo: Optional[int], hi: Optional[int], count: int, out: Dict[tuple, Hit]) -> int:
+        """Add the hits of one size slice (whole query when lo is None) to `out`;
+        returns the number of slices skipped."""
         if len(out) >= count:
-            return
-        sub = q if lo is None else f"{q} size:{lo}..{hi}"
-        total, items = self._page(sub, 1)
-        if total > MAX_RESULTS:
-            lo, hi = (0, MAX_SIZE) if lo is None else (lo, hi)
-            if hi - lo > 1:                                    # bisect by file size
-                mid = (lo + hi) // 2
-                self._collect(q, lo, mid, count, out)
-                self._collect(q, mid + 1, hi, count, out)
-                return
-        pages = min(math.ceil(total / PER_PAGE), MAX_RESULTS // PER_PAGE)
-        for page in range(1, pages + 1):
-            if page > 1:
-                _, items = self._page(sub, page)
-            for repo, commit, path in items:
-                out.setdefault((repo, commit, path), Hit(repo, commit, path, -1))   # stars fetched lazily
-            if len(out) >= count or len(items) < PER_PAGE:
-                break
+            return 0
+        if lo is None:
+            sub, lo, hi = q, 0, MAX_SIZE
+        else:
+            sub = f"{q} size:{lo}..{hi}"
+        try:
+            total, items = self._page(sub, 1)
+            if total > MAX_RESULTS and hi - lo > 1:            # bisect by file size
+                return self._bisect(q, lo, hi, count, out)
+            pages = min(math.ceil(total / PER_PAGE), MAX_RESULTS // PER_PAGE)
+            for page in range(1, pages + 1):
+                if page > 1:
+                    _, items = self._page(sub, page)
+                for repo, commit, path in items:
+                    out.setdefault((repo, commit, path), Hit(repo, commit, path, -1))   # stars fetched lazily
+                if len(out) >= count or len(items) < PER_PAGE:
+                    break
+        except SliceFailed as e:
+            if not isinstance(e, SliceRejected) and hi - lo > MIN_SLICE:
+                logging.warning("github search %r keeps failing (5xx/408): splitting size %d..%d", q, lo, hi)
+                return self._bisect(q, lo, hi, count, out)
+            logging.warning("github search %r: skipped size slice %d..%d", q, lo, hi)
+            return 1
+        return 0
 
     def search(self, query: str, count: int) -> List[Hit]:
         key = f"ghsq:{query}|{count}"
@@ -143,8 +174,12 @@ class GitHubSearch:
         if cached is not None:
             return [Hit(**h) for h in cached]
         out: Dict[tuple, Hit] = {}
-        self._collect(query, None, None, count, out)
+        skipped = self._collect(query, None, None, count, out)
         hits = list(out.values())[:count]
-        if not self.cached_only:          # a cached-only run may be partial: do not freeze it
+        if skipped:
+            logging.warning("github search %r: %d size slice(s) skipped, %d hits kept; a later run retries them",
+                            query, skipped, len(hits))
+        # a cached-only run, or one with skipped slices, may be partial: do not freeze it
+        if not self.cached_only and not skipped:
             self.cache.put_json(key, [h.__dict__ for h in hits])
         return hits

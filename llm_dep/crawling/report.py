@@ -5,8 +5,14 @@
 Writes manual_reviews/API_MIGRATION_COUNTS_NEED.md: an exact copy of the BEFORE file in which
 each U / O cell becomes `crawled/needed`, where needed = (max of the path, or --cap) - BEFORE
 count, and 0 when the API does not exist at that milestone. Samples of cells that BEFORE already
-filled are trimmed (unless --keep-extra). With --export also writes
-data/<lib>/O_crawled.json and U_crawled.json.
+filled are trimmed (unless --keep-extra).
+
+Writes manual_reviews/API_MIGRATION_COUNTS_AFTER.md, the final counts: the same copy of the BEFORE
+file in which each U / O cell becomes BEFORE + kept crawled samples (`-` when the API does not
+exist at that milestone), and each `dep → rep` line also shows the largest U / O cell of BEFORE
+(one sample covers several milestones, so a final cell can exceed it).
+
+With --export also writes data/<lib>/O_crawled.json and U_crawled.json (the kept samples).
 """
 import argparse
 import collections
@@ -18,6 +24,30 @@ from .evolution import LIBS, Evolution
 from .quota import Quota, parse_counts_md
 from .run import load_jsonl
 
+PAIR = re.compile(r"^(\S+) → (\S+)\s*$")
+
+
+def rewrite_counts(before: Path, ev: Evolution, cell_text, header_text=None) -> str:
+    """The BEFORE file with every U / O number replaced by cell_text((mapping_id, kind, version)),
+    and every `dep → rep` line by header_text(path, line) when given. Line endings are kept."""
+    text = before.read_text(encoding="utf-8")
+    eol = "\r\n" if "\r\n" in text else "\n"
+    out_lines, cur, versions = [], None, None
+    for line in text.split(eol):
+        if PAIR.match(line):
+            cur, versions = ev.by_deprecated.get(PAIR.match(line).group(1)), None
+            if header_text and cur is not None:
+                line = header_text(cur, line)
+        elif cur is not None and line.startswith("|"):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if cells[0] == "Version":
+                versions = cells[1:]
+            elif cells[0] in ("U", "O") and versions:
+                vals = [cell_text((cur.mapping_id, cells[0], v)) for v in versions]
+                line = f"| {cells[0]} | " + " | ".join(vals) + " |"
+        out_lines.append(line)
+    return eol.join(out_lines)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -25,6 +55,8 @@ def main():
     ap.add_argument("--crawl", default="data", help="root holding <lib>/crawl/samples.jsonl")
     ap.add_argument("--before", default="manual_reviews/API_MIGRATION_COUNTS_BEFORE.md")
     ap.add_argument("--out", default="manual_reviews/API_MIGRATION_COUNTS_NEED.md")
+    ap.add_argument("--after", default="manual_reviews/API_MIGRATION_COUNTS_AFTER.md",
+                    help="final counts: BEFORE + kept crawled samples")
     ap.add_argument("--cap", type=int, default=None)
     ap.add_argument("--export", action="store_true")
     ap.add_argument("--keep-extra", action="store_true",
@@ -66,25 +98,21 @@ def main():
                   f"{c['signature', 'O']:>7}/{c['signature', 'U']:<7} {ver:>20}")
 
     # Same file as BEFORE, only the numbers of the U / O rows are replaced.
-    out_lines, cur, versions = [], None, None
-    for line in Path(args.before).read_text(encoding="utf-8").split("\n"):
-        m = re.match(r"^(\S+) → (\S+)\s*$", line)
-        if m:
-            cur, versions = ev.by_deprecated.get(m.group(1)), None
-        elif cur is not None and line.startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if cells[0] == "Version":
-                versions = cells[1:]
-            elif cells[0] in ("U", "O") and versions:
-                vals = []
-                for v in versions:
-                    cell = (cur.mapping_id, cells[0], v)
-                    vals.append(f"{quota.filled[cell]}/{need(cell)}")
-                line = f"| {cells[0]} | " + " | ".join(vals) + " |"
-        out_lines.append(line)
-    Path(args.out).write_text("\n".join(out_lines), encoding="utf-8")
+    before = Path(args.before)
+    Path(args.out).write_text(rewrite_counts(before, ev, lambda c: f"{quota.filled[c]}/{need(c)}"),
+                              encoding="utf-8")
     total = quota.total_deficit()
     print(f"wrote {args.out}; remaining deficit (cap={args.cap}) {total}")
+
+    def final(cell):
+        return str(quota.have(cell)) if quota.feasible(cell) else "-"
+
+    def with_max(path, line):
+        kinds = quota.before[path.mapping_id]
+        return f"{line.rstrip()} (max BEFORE = {max(max(c.values(), default=0) for c in kinds.values())})"
+
+    Path(args.after).write_text(rewrite_counts(before, ev, final, with_max), encoding="utf-8")
+    print(f"wrote {args.after}")
 
     if args.export:
         for lib, ss in samples.items():

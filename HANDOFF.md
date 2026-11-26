@@ -21,7 +21,7 @@
   - Dữ liệu gốc có 5,3% mẫu không phải hàm, dữ liệu crawl có khoảng 22%. Người dùng giữ cả hai loại.
 - Chỉ tiêu dùng chung cho cả hai hàng U và O của một mapping: số lớn nhất của cả hai hàng.
   - Người dùng đã xem phương án tính riêng từng hàng và **giữ cách hiện tại**.
-- Mức sàn **100 mẫu mỗi ô** (`--min-target 100`, quyết định ngày 2026-11-27).
+- Mức sàn **50 mẫu mỗi ô** (`--min-target 50`, ngày 2026-11-27; lúc đầu chọn 100 rồi hạ xuống 50).
   - Lệnh `report` phải dùng cùng mức sàn.
 - Người dùng tự chạy `run_others.ps1`. Claude chỉ cập nhật lệnh trong script.
   - Claude chỉ chạy thử nhỏ, ghi ra thư mục tạm, không ghi vào `data/`.
@@ -69,7 +69,7 @@
   - gỡ 7 mẫu `pd.DataFrame.pad(...)` để gán lại (bản sao lưu `data/pandas/crawl/samples.jsonl.bak-unbound-self`);
   - bỏ 1.499 mẫu trùng tensorflow (9.940 → 8.441 dòng, bản sao lưu `samples.jsonl.bak-dup`). Nguyên nhân: lệnh #3 từng chạy hai tiến trình song song.
 
-## Tiến độ gần nhất (2026-11-26 22:00, trước khi có mức sàn 100)
+## Tiến độ gần nhất (2026-11-26 22:00, trước khi có mức sàn)
 
 | Thư viện | Tập | Ô cần lấp | Ô đã lấp đủ | Lượt lấp ô / cần |
 |---|---|---|---|---|
@@ -90,10 +90,12 @@
 | tensorflow | O | 349 | 178 (51%) | 27,269/68,089 (40.0%) |
 | tensorflow | U | 39 | 33 (85%) | 290/842 (34.4%) |
 
-- Bảng này dùng định dạng cũ. Bảng tiếp theo dùng định dạng mới và mức sàn 100, nên cột "cần" sẽ tăng.
-- Ảnh hưởng của mức sàn 100 (tính ngày 2026-11-27):
-  - 1.531 ô dưới 100 chỉ vì chỉ tiêu cũ dưới 100, cần thêm khoảng 130.400 lượt; riêng transformers khoảng 73.000;
-  - 88 ô dưới 100 dù chỉ tiêu ≥ 100, vì đã cạn nguồn: seaborn U 8, tensorflow O 74, tensorflow U 6.
+- Bảng này dùng định dạng cũ. Bảng tiếp theo dùng định dạng mới và mức sàn 50, nên cột "cần" sẽ tăng.
+- Ảnh hưởng của mức sàn 50 (tính ngày 2026-11-27):
+  - 1.390 ô dưới 50 chỉ vì chỉ tiêu cũ dưới 50, cần thêm khoảng 57.500 lượt;
+    - transformers khoảng 35.000, tensorflow 11.700, pandas 8.400, scipy 1.360, pytorch 840, scikit-learn 160, numpy và seaborn 0;
+  - 75 ô dưới 50 dù chỉ tiêu ≥ 50, vì đã cạn nguồn (seaborn U, tensorflow).
+  - Với mức sàn 100 thì là 1.531 ô và khoảng 130.400 lượt.
 
 ## Ô khả thi vẫn chưa có mẫu nào (BEFORE + crawl = 0), 67 ô
 
@@ -128,15 +130,15 @@
 
 ## Trạng thái file
 
-- `run_others.ps1` (soạn lúc 02:55 ngày 2026-11-27, chưa chạy với bản nhiều tiến trình) gồm 3 bước, mỗi bước kết thúc bằng `report --export @floor`:
-  1. **Đọc lại cache**: 3 nhóm (pandas, scipy, scikit-learn, numpy), transformers, tensorflow (`--cache cache_tensorflow`).
+- `run_others.ps1` (soạn lúc 03:00 ngày 2026-11-27, mức sàn 50, chưa chạy) gồm 3 bước, mỗi bước kết thúc bằng `report --export @floor`:
+  1. **Đọc lại cache**: 3 nhóm (pandas, scipy, scikit-learn), transformers, tensorflow (`--cache cache_tensorflow`).
      - Mỗi nhóm có 6 lệnh `--cached-only --reprocess`: #1 limit 2000, #2 limit 2000 và 5000, #3 limit 40000, #2 và #3 cho notebook.
      - Không gửi truy vấn tìm kiếm nào.
-  2. **Đợt A, Sourcegraph tìm mới** (#1 rồi #2) cho 4 thư viện trên và transformers: khoảng 110 truy vấn, mất vài giờ.
-  3. **Đợt B, GitHub tìm mới** (#3, `--gh-interval 20`) cho pandas, scipy, scikit-learn, numpy.
-     - Khoảng 137 truy vấn, mất 11–57 giờ.
+  2. **Đợt A, Sourcegraph tìm mới** (#1 rồi #2) cho 3 thư viện trên và transformers: khoảng 105 truy vấn (chưa kể truy vấn theo dependency), mất vài giờ.
+  3. **Đợt B, GitHub tìm mới** (#3, `--gh-interval 20`) cho pandas, scipy, scikit-learn.
+     - Khoảng 116 truy vấn (pandas 66, scipy 46, scikit-learn 4), mất 10–48 giờ.
      - Không chạy cho transformers và tensorflow: API hiếm, nguồn gần cạn.
-- Không có pytorch (máy này không có cache; README đã có lệnh kèm `--min-target 100`) và seaborn (mức sàn không mở thêm ô nào).
+- Không có pytorch (máy này không có cache; README đã có lệnh kèm `--min-target 50`), numpy và seaborn (không có ô nào dưới 50 mà mức sàn mở thêm).
 - Lần chạy trước, bắt đầu 02:18 và chạy lại lúc 02:41, dừng lúc 02:48 ở lệnh #1 của pandas (`pandas.DataFrame.pad`).
 - Ctrl+C trong PowerShell dừng cả script. Chạy lại thì:
   - lệnh tìm mới tiếp tục từ chỗ dừng;

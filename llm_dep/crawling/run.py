@@ -388,7 +388,7 @@ def main():
                          "latest: use the newest allowed version at commit time")
     ap.add_argument("--cap", type=int, default=None, help="upper bound for the per-cell target")
     ap.add_argument("--min-target", type=int, default=0,
-                    help="lower bound for the per-cell target (applied before --cap), e.g. 100")
+                    help="lower bound for the per-cell target (applied before --cap), e.g. 50")
     ap.add_argument("--baseline", default="existing", choices=["none", "existing"],
                     help="existing: count the BEFORE numbers as already filled")
     ap.add_argument("--search-limit", type=int, default=2000, help="max results of a broad query")

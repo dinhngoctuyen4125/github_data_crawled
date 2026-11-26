@@ -24,20 +24,20 @@
 ## 2. Chạy
 
 - Chạy từ thư mục gốc của repo, **lần lượt từng lệnh**: các lệnh dùng chung một token.
-- `--min-target 100`: mỗi ô cần ít nhất 100 mẫu.
+- `--min-target 50`: mỗi ô cần ít nhất 50 mẫu.
 
 ```bash
 # 1. Sourcegraph, gán version theo dependency
-python -m llm_dep.crawling.run --libs transformers pytorch --min-target 100 --search-limit 5000 --wait-on-block 60
-python -m llm_dep.crawling.run --libs tensorflow --cap 500 --min-target 100 --search-limit 5000 --wait-on-block 60
+python -m llm_dep.crawling.run --libs transformers pytorch --min-target 50 --search-limit 5000 --wait-on-block 60
+python -m llm_dep.crawling.run --libs tensorflow --cap 500 --min-target 50 --search-limit 5000 --wait-on-block 60
 
 # 2. Sourcegraph, gán theo signature (chỉ đọc lại kết quả đã tải ở bước 1)
-python -m llm_dep.crawling.run --libs transformers pytorch --min-target 100 --assign signature --cached-only --search-limit 5000
-python -m llm_dep.crawling.run --libs tensorflow --cap 500 --min-target 100 --assign signature --cached-only --search-limit 5000
+python -m llm_dep.crawling.run --libs transformers pytorch --min-target 50 --assign signature --cached-only --search-limit 5000
+python -m llm_dep.crawling.run --libs tensorflow --cap 500 --min-target 50 --assign signature --cached-only --search-limit 5000
 
 # 3. GitHub Code Search, gán theo signature, lấp phần còn thiếu
-python -m llm_dep.crawling.run --libs transformers pytorch --min-target 100 --source github --assign signature --search-limit 5000 --wait-on-block 30
-python -m llm_dep.crawling.run --libs tensorflow --cap 500 --min-target 100 --source github --assign signature --search-limit 5000 --wait-on-block 30
+python -m llm_dep.crawling.run --libs transformers pytorch --min-target 50 --source github --assign signature --search-limit 5000 --wait-on-block 30
+python -m llm_dep.crawling.run --libs tensorflow --cap 500 --min-target 50 --source github --assign signature --search-limit 5000 --wait-on-block 30
 ```
 
 - Thêm `--plan` vào lệnh để xem số mẫu còn thiếu, không crawl.

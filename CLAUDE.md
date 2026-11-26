@@ -45,7 +45,7 @@ python -m llm_dep.crawling.report --export                               # NEED.
   - The user runs it; Claude only edits its commands.
   - pytorch and tensorflow are also crawled on other machines (`llm_dep/crawling/README.md`, in Vietnamese).
 - Library-specific flags: pandas `--infer-types`, transformers `--allow-from-pretrained`, tensorflow `--cap 500`.
-- `--min-target N` raises every target to at least N (currently 100).
+- `--min-target N` raises every target to at least N (currently 50).
   - `report` must get the same `--min-target`; otherwise it trims the samples above the old target.
 - Other useful flags: `--notebooks` (search `.ipynb`), `--wait-on-block`, `--gh-interval`, `--kinds`.
 - Re-running an interrupted command resumes it.

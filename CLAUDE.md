@@ -32,7 +32,7 @@ transformers).
 
 Run from the repo root, **one command at a time**: they share one token and its rate limits.
 
-```
+```bash
 python -m llm_dep.crawling.run --libs numpy --plan                       # print per-cell deficits only
 python -m llm_dep.crawling.run --libs numpy                              # #1 Sourcegraph, assign by dependency
 python -m llm_dep.crawling.run --libs numpy --assign signature --search-limit 5000              # #2 Sourcegraph, by signature
@@ -84,6 +84,11 @@ accept the sample only for (mapping, U/O, milestone) cells still short.
     - unbound calls `Cls.method(obj, ...)`;
     - relative imports inside copies of the library;
     - Python 2 files (lib2to3 syntax fixers only, text mapped back 1:1 to the original lines).
+- **Parallelism** (`run.py` `_analyze_batch`):
+  - downloads and dependency resolution run in threads of the main process, so request intervals hold;
+  - call-site extraction is pure CPU work and runs in `--workers` processes;
+  - if a worker dies, that file is extracted in the main process and the pool is recreated.
+- **Testing offline**: blocking `net.get` alone caches "missing" results in `cache/`; also stub `DiskCache.put`.
 - **Notebooks** (`--notebooks`):
   - code cells are joined into one script;
   - IPython magics and cells that do not parse are commented out;

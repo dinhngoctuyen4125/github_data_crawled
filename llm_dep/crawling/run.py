@@ -8,8 +8,9 @@ import re
 import sys
 import time
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Set, Tuple
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+from typing import Dict, List, Optional, Set, Tuple
 
 from packaging.version import Version
 
@@ -108,7 +109,8 @@ class Crawler:
         processed = self.load_state(lib)
         out = (self.out_dir(lib) / "samples.jsonl").open("a", encoding="utf-8")
         prog = self.progress_file(lib).open("a", encoding="utf-8")
-        pool = ThreadPoolExecutor(max_workers=self.args.workers)
+        self.threads = ThreadPoolExecutor(max_workers=self.args.workers)
+        self.procs, self.procs_broken = ProcessPoolExecutor(max_workers=self.args.workers), False
         try:
             for kind in self.args.kinds:
                 for target in self.ev.targets(lib, kind):
@@ -128,8 +130,11 @@ class Crawler:
                             if not self._open(paths, kind):
                                 break
                             batch = hits[b:b + step]
-                            # downloads + dependency resolution run in parallel, acceptance is sequential
-                            for h, (status, sites, res) in zip(batch, pool.map(lambda h: self._analyze(lib, target, h), batch)):
+                            if self.procs_broken:                  # replace the pool after a worker died
+                                self.procs.shutdown(wait=False, cancel_futures=True)
+                                self.procs, self.procs_broken = ProcessPoolExecutor(max_workers=self.args.workers), False
+                            # hits are analysed in parallel, acceptance is sequential (in hit order)
+                            for h, (status, sites, res) in zip(batch, self._analyze_batch(lib, target, batch)):
                                 if status == "ok":
                                     self._accept(kind, target, paths, h, sites, res, query, out)
                                 else:
@@ -140,7 +145,8 @@ class Crawler:
                             out.flush(); prog.flush()
                     logging.info("%s %s %s: %s", lib, kind, target, dict(self.stats - before))
         finally:
-            pool.shutdown(wait=True)
+            self.threads.shutdown(wait=True)
+            self.procs.shutdown(wait=True, cancel_futures=True)
             out.close(); prog.close()
 
     def _open(self, paths, kind) -> bool:
@@ -174,25 +180,59 @@ class Crawler:
         """--infer-types only acts on pandas (queries by method name + receiver type inference)."""
         return self.args.infer_types and lib == "pandas"
 
-    def _analyze(self, lib, target, hit) -> Tuple[str, list, object]:
-        """Thread-safe part: download, extract call sites, resolve the dependency version."""
+    def _analyze_batch(self, lib, target, batch) -> List[Tuple[str, list, object]]:
+        """(status, sites, resolution) of each hit, in order. Downloads and dependency resolutions run in
+        threads of this process (so the request intervals hold); call-site extraction is pure CPU work, which
+        threads cannot parallelise (GIL), so it runs in worker processes."""
+        fetched = list(self.threads.map(self._fetch, batch))
+        jobs = []
+        for h, (status, code) in zip(batch, fetched):
+            args = (code, [target], self.indexer_apis & {target})
+            kwargs = dict(infer_types=self._infer_types(lib), from_pretrained=self.args.allow_from_pretrained, path=h.path)
+            jobs.append((args, kwargs, self._submit(args, kwargs) if status == "ok" else None))
+        return list(self.threads.map(lambda x: self._finish(lib, target, *x), zip(batch, fetched, jobs)))
+
+    def _submit(self, args, kwargs):
+        try:
+            return self.procs.submit(extract_sites, *args, **kwargs)
+        except BrokenProcessPool:     # extracted in this process by _finish instead
+            return None
+
+    def _fetch(self, hit) -> Tuple[str, Optional[str]]:
+        """(status, code): skip library copies and notebook checkpoints, read the file, turn a notebook into a script."""
         try:
             if not self.args.include_vendored and VENDORED.search(hit.path):
-                return "vendored_path", [], None
+                return "vendored_path", None
             notebook = hit.path.endswith(".ipynb")
             if notebook and CHECKPOINT.search(hit.path):     # Jupyter's autosaved copy of another notebook
-                return "notebook_checkpoint", [], None
+                return "notebook_checkpoint", None
             code = self.gh.raw(hit.repo, hit.commit, hit.path, fallback=True)
             if code is None:
-                return "download_failed", [], None
+                return "download_failed", None
             if notebook:
                 code = notebook_to_script(code)
                 if code is None:
-                    return "not_a_notebook", [], None
-            sites = [s for s in extract_sites(code, [target], self.indexer_apis & {target},
-                                                infer_types=self._infer_types(lib),
-                                                from_pretrained=self.args.allow_from_pretrained, path=hit.path)
-                     if s["matched api"] == target]
+                    return "not_a_notebook", None
+            return "ok", code
+        except Exception:
+            logging.exception("failed on %s@%s:%s", hit.repo, hit.commit, hit.path)
+            return "error", None
+
+    def _finish(self, lib, target, hit, fetched, job) -> Tuple[str, list, object]:
+        """Collect the extracted call sites, drop known functions, resolve the dependency version."""
+        status, _ = fetched
+        args, kwargs, future = job
+        if status != "ok":
+            return status, [], None
+        try:
+            try:
+                if future is None:
+                    raise BrokenProcessPool
+                sites = future.result()
+            except BrokenProcessPool:       # a worker died (e.g. on a pathological file): extract here, as before
+                self.procs_broken = True
+                sites = extract_sites(*args, **kwargs)
+            sites = [s for s in sites if s["matched api"] == target]
             if not sites:
                 return "no_call_site", [], None
             sites = [s for s in sites if func_key(s["function"]) not in self.seen_funcs]

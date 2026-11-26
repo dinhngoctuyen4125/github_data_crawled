@@ -47,7 +47,7 @@
 - `report.py`:
   - đổi `AFTER.md` cũ thành `API_MIGRATION_COUNTS_NEED.md` (`đã crawl/cần`);
   - thêm `API_MIGRATION_COUNTS_AFTER.md` là số mẫu cuối cùng: BEFORE + mẫu crawl được giữ, `-` khi API không tồn tại, cạnh mỗi cặp ghi `(max BEFORE = N)`.
-- **Chưa commit** (2026-11-27):
+- Commit 5208dbd (2026-11-27), trừ mục tiến trình con là **chưa commit**:
   - thêm `--min-target` (`quota.py`, `run.py`, `report.py`);
   - dọn code `llm_dep/crawling`:
     - gộp `binds`/`binds_starred`;
@@ -56,6 +56,10 @@
     - bỏ trường không dùng `Placement.milestone`;
     - mô tả đầu mỗi file chỉ còn một dòng;
   - tăng tốc trích lời gọi khoảng 1,4–2 lần (tách dòng bằng regex, `walk_stmts` bỏ qua cây con biểu thức);
+  - **(chưa commit)** trích lời gọi chạy trong 8 tiến trình con (`run.py`, `_analyze_batch`), nhanh hơn khoảng 2,5–5 lần:
+    - tải file và tra dependency vẫn chạy bằng luồng trong tiến trình chính, nên rate limit không đổi;
+    - tiến trình con bị sập thì file đó được trích lại trong tiến trình chính, rồi nhóm tiến trình được tạo lại;
+    - so với chạy bằng luồng: mẫu và file tiến độ giống hệt (seaborn, scipy, scikit-learn O);
   - kiểm tra hành vi không đổi:
     - `selfcheck` không đổi;
     - chuỗi truy vấn và chỉ tiêu giống hệt;
@@ -119,23 +123,25 @@
 
 - Chạy notebook (`--notebooks`) cho pytorch và tensorflow; hai thư viện này chưa có đợt notebook nào.
 - Thêm truy vấn `"F.<tên>"` cho `torch.nn.functional`: cần sửa code, ước tính thêm vài chục mẫu.
-- Chạy `--cached-only` bằng nhiều tiến trình song song (process pool), nhanh hơn khoảng 5 lần.
-  - Phải cẩn thận để không vượt rate limit của GitHub REST.
 - Đo xem bỏ các quy tắc trích của bài báo sẽ thêm bao nhiêu mẫu (sẽ lệch với cách làm của bài báo).
 - Cho phép `vendored_path`: phần lớn là trùng lặp, không đại diện cho code người dùng.
 
 ## Trạng thái file
 
-- `run_others.ps1`: đợt **đọc lại cache với mức sàn 100**. Người dùng bắt đầu chạy lúc 02:18 ngày 2026-11-27.
-  - 3 nhóm: (numpy, pandas, scikit-learn, scipy), transformers, tensorflow (`--cache cache_tensorflow`).
-  - Mỗi nhóm có 6 lệnh `--cached-only --reprocess`, nên không gửi truy vấn tìm kiếm nào:
-    - #1 với limit 2000;
-    - #2 với limit 2000 và 5000;
-    - #3 với limit 40000;
-    - #2 và #3 cho notebook.
-  - Cuối cùng chạy `report --export @floor`.
-  - Không có pytorch (máy này không có cache) và seaborn (mức sàn không mở thêm ô nào).
-- Chạy xong thì:
-  - lập bảng tiến độ theo định dạng mới;
-  - soạn đợt tìm mới cho các ô còn thiếu, ưu tiên pandas, scipy, scikit-learn, numpy.
-- Ctrl+C trong PowerShell dừng cả script. Chạy lại đúng lệnh bị dừng thì nó tiếp tục từ chỗ dừng.
+- `run_others.ps1` (soạn lúc 02:55 ngày 2026-11-27, chưa chạy với bản nhiều tiến trình) gồm 3 bước, mỗi bước kết thúc bằng `report --export @floor`:
+  1. **Đọc lại cache**: 3 nhóm (pandas, scipy, scikit-learn, numpy), transformers, tensorflow (`--cache cache_tensorflow`).
+     - Mỗi nhóm có 6 lệnh `--cached-only --reprocess`: #1 limit 2000, #2 limit 2000 và 5000, #3 limit 40000, #2 và #3 cho notebook.
+     - Không gửi truy vấn tìm kiếm nào.
+  2. **Đợt A, Sourcegraph tìm mới** (#1 rồi #2) cho 4 thư viện trên và transformers: khoảng 110 truy vấn, mất vài giờ.
+  3. **Đợt B, GitHub tìm mới** (#3, `--gh-interval 20`) cho pandas, scipy, scikit-learn, numpy.
+     - Khoảng 137 truy vấn, mất 11–57 giờ.
+     - Không chạy cho transformers và tensorflow: API hiếm, nguồn gần cạn.
+- Không có pytorch (máy này không có cache; README đã có lệnh kèm `--min-target 100`) và seaborn (mức sàn không mở thêm ô nào).
+- Lần chạy trước, bắt đầu 02:18 và chạy lại lúc 02:41, dừng lúc 02:48 ở lệnh #1 của pandas (`pandas.DataFrame.pad`).
+- Ctrl+C trong PowerShell dừng cả script. Chạy lại thì:
+  - lệnh tìm mới tiếp tục từ chỗ dừng;
+  - lệnh `--reprocess` chạy lại từ đầu lệnh đó (không sinh mẫu trùng).
+- Khi chạy xong, hoặc khi người dùng hỏi: lập bảng tiến độ theo định dạng mới.
+- Lưu ý khi test: chặn mạng thì cũng phải chặn ghi cache (`DiskCache.put`).
+  - Nếu không, các kết quả "không có" sẽ bị lưu vào `cache/`.
+  - Đã xảy ra một lần (37 khoá của `danleh/wasabi`) và đã được xoá.

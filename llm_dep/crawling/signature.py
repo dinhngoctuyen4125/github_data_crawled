@@ -169,8 +169,10 @@ def binds_starred(call: Call, params: Params, drop_self: bool) -> bool:
     filled = set(names[: call.n_pos_fixed])
     kw_names = {n for n, _ in params.kwonly}
     for k in call.keywords:
-        if k in names[:nposonly] and not params.varkw:
-            return False
+        if k in names[:nposonly]:
+            if not params.varkw:
+                return False
+            continue                  # goes into **kwargs; the positional-only slot is not filled
         if k in filled:
             return False
         if not (k in names[nposonly:] or k in kw_names or params.varkw):
@@ -189,8 +191,10 @@ def binds(call: Call, params: Params, drop_self: bool) -> bool:
     filled = set(names[: call.n_pos])
     kw_names = {n for n, _ in params.kwonly}
     for k in call.keywords:
-        if k in names[:nposonly] and not params.varkw:
-            return False
+        if k in names[:nposonly]:
+            if not params.varkw:
+                return False
+            continue                  # goes into **kwargs; the positional-only slot is not filled
         if k in filled:
             return False
         if k in names[nposonly:] or k in kw_names:

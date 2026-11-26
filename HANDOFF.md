@@ -8,79 +8,95 @@
 - pytorch và tensorflow do người dùng chạy trên máy khác (hướng dẫn ở `llm_dep/crawling/README.md`). Phiên này chỉ lo numpy, pandas, scikit-learn, scipy, seaborn, transformers.
 
 ## Yêu cầu, ràng buộc và quyết định đã thống nhất
-- Luôn trả lời bằng tiếng Việt, đơn giản, dễ hiểu.
+- Luôn trả lời bằng tiếng Việt, đơn giản, dễ hiểu, dạng bullet, đủ ý, không lan man.
 - Phải giải thích và được đồng ý trước khi sửa code hoặc dữ liệu.
 - Token nằm trong `.env` (gitignored): không in ra, không chia sẻ. Email và thông tin cá nhân của người dùng là riêng tư.
-- Tôn trọng rate limit: không xoay vòng token, không lách giới hạn.
-- Chạy crawl lần lượt, không chạy song song trên cùng một token.
+- Tôn trọng rate limit: không xoay vòng token, không lách giới hạn. Chạy crawl lần lượt, không song song trên cùng token.
 - Giữ nguyên bộ key của mẫu, không thêm trường mới cho từng mẫu.
+- Mẫu được phép là hàm/method **hoặc** khối lệnh rời (tối đa 5 câu lệnh cấp module), giống bài báo.
+  - Dữ liệu gốc có 5,3% mẫu không phải hàm (1.459/27.427), dữ liệu crawl có khoảng 22%.
+  - Người dùng đã quyết định giữ cả hai loại.
+- Người dùng tự chạy `run_others.ps1`. Claude chỉ cập nhật lệnh vào script; chỉ chạy thử nhỏ, ghi ra thư mục tạm, không ghi vào `data/`.
 - Bảng tiến độ:
-  - dùng đúng các cột: Thư viện | Tập | Ô cần lấp | Ô đã lấp đủ | Lượt lấp ô / cần;
+  - dùng đúng các cột: Thư viện | Tập | Ô cần lấp | Ô đã lấp đủ | Lượt lấp ô / cần (kèm %);
   - nhóm theo thư viện, O trước U;
-  - không đưa pytorch và tensorflow vào bảng.
+  - không đưa pytorch và tensorflow vào bảng, không thêm dòng tổng.
 - Chạy bằng Python 3.11: `C:\Users\tuyen\AppData\Local\Programs\Python\Python311\python.exe`.
-  - conda base là Python 3.13, không còn `lib2to3`, nên không đọc được file Python 2.
-  - env `crawl` là Python 3.10, thiếu `tomllib`.
-- Trong `run_others.ps1`, giữ riêng hai dòng sklearn: dòng 20000 đọc lại cache, dòng 40000 tìm kiếm mới cho GMM.
+  - conda base là Python 3.13, không còn `lib2to3`; env `crawl` là Python 3.10, thiếu `tomllib`.
 
-## Công việc đã hoàn thành
-- `extract.py` đọc được file Python 2. Cách làm:
-  - chỉ dùng các fixer cú pháp của lib2to3 (`PY2_SYNTAX_FIXERS`);
-  - lấy lại text gốc theo từng dòng, tương ứng 1:1;
-  - mỗi luồng có một `RefactoringTool` riêng.
-- `extract.py` resolve được import tương đối (`from . import utils`, `from ..utils import despine`):
-  - package suy từ đường dẫn file (`package_of`), bắt đầu từ thư mục cuối cùng có tên là package top-level của thư viện;
-  - `run.py` truyền `path=hit.path` vào `extract_sites`;
-  - đã test thủ công: đúng trong `seaborn/` và `seaborn/tests/`, bỏ qua khi file nằm ngoài package hoặc `path=None`.
-- `run_others.ps1` gom toàn bộ lệnh chạy. Người dùng đã chạy xong; `AFTER.md` được cập nhật lúc 02:40.
-  - Bước 1: đọc lại cache bằng luật mới (`--cached-only --reprocess`), cho cả nguồn GitHub và Sourcegraph.
-  - Bước 2: tìm kiếm GitHub mới cho sklearn GMM, giới hạn 40000.
-  - Bước 3: `report --export`.
-- Tạo `CLAUDE.md`.
+## Công việc đã hoàn thành (code đã commit)
+- `extract.py`:
+  - đọc file Python 2 (chỉ dùng fixer cú pháp của lib2to3, text ánh xạ 1:1 về dòng gốc);
+  - resolve import tương đối trong bản sao thư viện (package suy từ đường dẫn file).
+- Hỗ trợ notebook, cờ `--notebooks`:
+  - tìm kiếm: GitHub `extension:ipynb`, Sourcegraph `file:\.ipynb$`;
+  - `notebook_to_script` (`extract.py`):
+    - nối các ô code thành một script, đọc được nbformat 3 và 4;
+    - dòng magic hoặc shell được chuyển thành comment;
+    - cell `%%bash` hoặc cell không parse được thì comment cả cell;
+  - bỏ qua `.ipynb_checkpoints/`;
+  - cache chỉ lưu code (`github.strip_notebook`).
+- Sửa lỗi `self` trong `signature.py`:
+  - lời gọi qua tên class `pd.DataFrame.pad(x, ...)` coi `x` là `self`, bớt 1 tham số vị trí rồi mới so với chữ ký;
+  - nhận dạng dạng này theo AST (`Call.receiver`), không theo chuỗi text;
+  - `selfcheck` không đổi (`disagree=0`).
+- Đã chạy (người dùng chạy):
+  - đợt notebook cho các thư viện còn thiếu;
+  - lượt đọc lại cache pandas sau khi sửa lỗi `self`;
+  - `report --export`.
+  - `AFTER.md` cập nhật lúc 09:43 ngày 2026-11-26.
+- Dữ liệu: đã gỡ 7 mẫu `pd.DataFrame.pad(...)` khỏi `data/pandas/crawl/samples.jsonl` để gán lại.
+  - 5 mẫu được nhận lại, gán đủ 1.1.0–2.3.3.
+  - 2 mẫu thừa (ô đã đủ) chỉ còn trong bản sao lưu `data/pandas/crawl/samples.jsonl.bak-unbound-self`.
 
-## Các file đã tạo hoặc chỉnh sửa
-- `llm_dep/crawling/extract.py` (đã commit)
-- `llm_dep/crawling/run.py` (đã commit)
-- `run_others.ps1` (đã commit)
-- `CLAUDE.md` (mới, chưa commit)
-- `HANDOFF.md` (mới, chưa commit)
-- Dữ liệu được cập nhật khi chạy:
-  - `data/<lib>/crawl/samples.jsonl`
-  - `data/<lib>/crawl/processed*.progress.jsonl`
-  - `data/<lib>/{O,U}_crawled.json`
-  - `manual_reviews/API_MIGRATION_COUNTS_AFTER.md`
-- Script tạm dựng bảng tiến độ: `C:\Users\tuyen\AppData\Local\Temp\claude\dc8dc83bc3ce8279\61ea4ca3-c37f-4be4-804e-01b0ad8f99fc\scratchpad\fill.py`
-  - chạy bằng `PYTHONIOENCODING=utf-8 PYTHONPATH=. python <path>`;
-  - tiêu đề cột trong script là "Mẫu đã lấp/cần", khi báo cáo đổi thành "Lượt lấp ô / cần";
-  - thư mục scratchpad có thể bị xoá.
-
-## Tiến độ hiện tại (sau khi chạy run_others.ps1)
+## Tiến độ hiện tại (2026-11-26 09:43)
 | Thư viện | Tập | Ô cần lấp | Ô đã lấp đủ | Lượt lấp ô / cần |
 |---|---|---|---|---|
 | numpy | O | 21 | 21 (100%) | 18,827/18,827 (100%) |
 | numpy | U | 12 | 12 (100%) | 75/75 (100%) |
-| pandas | O | 105 | 92 (88%) | 463/492 (94.1%) |
+| pandas | O | 105 | 97 (92%) | 484/492 (98.4%) |
 | pandas | U | 22 | 22 (100%) | 163/163 (100%) |
-| scikit-learn | O | 33 | 23 (70%) | 10,215/11,521 (88.7%) |
+| scikit-learn | O | 33 | 31 (94%) | 10,723/11,521 (93.1%) |
 | scikit-learn | U | 34 | 34 (100%) | 470/470 (100%) |
-| scipy | O | 55 | 50 (91%) | 3,913/4,042 (96.8%) |
+| scipy | O | 55 | 50 (91%) | 3,923/4,042 (97.1%) |
 | scipy | U | 54 | 54 (100%) | 4,454/4,454 (100%) |
-| seaborn | O | 20 | 19 (95%) | 8,411/9,006 (93.4%) |
-| seaborn | U | 15 | 7 (47%) | 810/4,651 (17.4%) |
+| seaborn | O | 20 | 19 (95%) | 8,422/9,006 (93.5%) |
+| seaborn | U | 15 | 7 (47%) | 834/4,651 (17.9%) |
 | transformers | O | 44 | 36 (82%) | 36/44 (81.8%) |
 | transformers | U | 218 | 218 (100%) | 603/603 (100%) |
 
-## Vấn đề chưa giải quyết
-- Chưa xác nhận đợt crawl GMM 40000 đã chạy hết hay dừng giữa chừng. Kiểm tra trong `data/crawl.log`.
-- seaborn U thiếu khoảng 3,800 lượt.
-  - Mẫu U chủ yếu là `utils.despine(...)` trong chính mã nguồn seaborn.
-  - Người dùng thường viết `sns.despine()`, mà cách gọi này được tính là O.
-  - Vì vậy gần như không thể lấp thêm.
-- sklearn O thiếu khoảng 1,300 lượt, phần lớn là GMM.
-- pandas O còn 13 ô chưa đủ, scipy O còn 5 ô, transformers O còn 8 ô.
+Cách tính bảng:
+- Script tạm: `C:\Users\tuyen\AppData\Local\Temp\claude\dc8dc83bc3ce8279\1eeb09e3-f8d8-43be-9e0f-3fdb399b714c\scratchpad\fill.py`. Thư mục này có thể bị xoá.
+- Chạy bằng `PYTHONIOENCODING=utf-8 PYTHONPATH=. python <path>`.
+- Logic:
+  - dựng `Quota(ev, parse_counts_md(BEFORE), baseline="existing")`;
+  - nạp mọi `samples.jsonl`, chỉ cộng mẫu còn chạm ô thiếu;
+  - với mỗi ô khả thi, `need = target - BEFORE`, rồi đếm số ô và số lượt đã lấp (tối đa `need`).
 
-## Các bước tiếp theo (đã đề xuất, chưa được duyệt)
-- Hỗ trợ notebook (`.ipynb`), có thể giúp thêm mẫu cho `seaborn.tsplot` và sklearn GMM.
+## Các ô O còn thiếu và nguyên nhân (đã kiểm tra)
+- `sklearn.mixture.GMM`, chỉ thiếu ở 0.9 và 0.10 (245/644 mỗi ô):
+  - chữ ký 0.9/0.10 dùng `cvtype`, chưa có `n_iter`, `n_init`, `params`;
+  - 409/654 mẫu dùng `covariance_type=` hoặc `n_iter=`, nên không gắn được vào hai bản này. Đây là quy tắc đúng.
+- `seaborn.tsplot`, chỉ thiếu ở 0.1 (100/684):
+  - chữ ký 0.1 là `tsplot(x, data, ...)`, người dùng thường viết `tsplot(data, time=...)`;
+  - 473/573 mẫu không gắn được vào 0.1.
+- `scipy.stats.betai` (10/49 ở 3 ô) và `scipy.special.sph_yn` (9/10 ở 2 ô): rất ít lời gọi thật; phần lớn kết quả là bản sao scipy (`vendored_path`).
+- `pandas.Series.pad` (8 ô, 0 mẫu): mọi `.pad(` tìm được là `np.pad`, `F.pad`, `str.pad`.
+- transformers `SEWForSequenceClassification` và `TFWav2Vec2ForCTC.freeze_feature_extractor`:
+  - 775 file khớp đều là bản sao mã nguồn transformers, chỉ định nghĩa, không gọi;
+  - 66 lời gọi tìm được đều trùng dữ liệu gốc.
+- seaborn U (`utils.despine`): mẫu U chủ yếu nằm trong chính mã nguồn seaborn, còn người dùng viết `sns.despine()` (được tính là O). Gần như không lấp thêm được.
+- Đợt notebook đã thêm mẫu: sklearn O 90, seaborn O 11, seaborn U 3, scipy O 5, pandas O 1. Sourcegraph gần như không có notebook.
+
+## Các hướng còn lại (chưa được duyệt)
+- Đo xem bỏ các quy tắc trích xuất của bài báo sẽ thêm bao nhiêu mẫu. Bỏ chúng sẽ lệch với cách làm của bài báo. Các quy tắc:
+  - mỗi file chỉ lấy 1 khối lệnh rời;
+  - mỗi hàm chỉ lấy lời gọi đầu tiên;
+  - khối lệnh cần ít nhất một câu lệnh đứng trước lời gọi.
+- Cho phép `vendored_path` (bản sao thư viện trong `site-packages`): có thể phần lớn là trùng lặp và không đại diện cho code người dùng.
 - Viết lại phần mẫu dependency (dependency-sample).
 - Thêm các dòng lệnh cho pytorch nếu người dùng cần.
-- Commit `CLAUDE.md` và `HANDOFF.md` khi người dùng yêu cầu.
+
+## Trạng thái file
+- `run_others.ps1` hiện chứa lượt đọc lại cache pandas (đã chạy xong).
+- Đợt kế tiếp thì thay nội dung file bằng lệnh mới.

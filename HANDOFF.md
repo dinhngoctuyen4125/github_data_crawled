@@ -46,6 +46,13 @@
   - lời gọi qua tên class `pd.DataFrame.pad(x, ...)` coi `x` là `self`, bớt 1 tham số vị trí rồi mới so với chữ ký;
   - nhận dạng dạng này theo AST (`Call.receiver`), không theo chuỗi text;
   - `selfcheck` không đổi (`disagree=0`).
+- Alias bằng phép gán ở cấp module (`extract.py`, `CallSiteMatcher._module_assignments`):
+  - `tf1 = tf.compat.v1`, `v1 = tf.compat.v1`, `GMM = mixture.GMM` được coi là alias;
+  - `tf = tf.compat.v1` (ghi đè) giờ gán đúng sang `compat.v1` (trước bị gán nhầm sang `tf.to_*`);
+  - phép gán bên trong hàm và tên chưa import thì bỏ qua.
+- Truy vấn mới cho API `compat.v1.*`: GitHub `"compat.v1" <tên>`, Sourcegraph `compat.v1 .<tên>(`.
+  - Truy vấn Sourcegraph được chèn trước truy vấn cuối, nên truy vấn dependency (#1) cũ giữ nguyên cache.
+  - `selfcheck` không đổi.
 - Đã chạy (người dùng chạy):
   - đợt notebook cho các thư viện còn thiếu;
   - lượt đọc lại cache pandas sau khi sửa lỗi `self`;
@@ -116,6 +123,16 @@ Cách tính bảng:
   - Ở hai bản này chữ ký là `load(sess, tags, export_dir, ...)`, còn `load(path)` chỉ khớp từ 2.0.
 - Lệnh #3 của tensorflow đã chạy hết, không có `skipped size slice`, rate limit đều được chờ.
   - Máy tensorflow chạy code cũ (trước commit `6e45c21`), thiếu truy vấn thứ tư dạng `"v1.to_double"`, `"saved_model.load"`.
+- Khâu tìm kiếm và trích xuất từng bỏ sót cách viết `tf1 = tf.compat.v1; tf1.to_double(...)`. Đã sửa (xem phần công việc đã hoàn thành).
+- Phần lớn file tensorflow bị loại là mã nguồn TF (`site-packages`, `tensorflow/python/ops/...`), nơi các hàm chỉ được định nghĩa, không được gọi. Ví dụ `tf.to_complex64`: 605/718 file không phải `vendored_path` mà vẫn không nhận được là bản sao TF.
+
+## Cache tensorflow (`cache_tensorflow/`)
+- Người dùng chép cache của máy tensorflow về `cache_tensorflow/` (gitignored, cấu trúc như `cache/`). Dùng bằng `--cache cache_tensorflow`.
+- Đã kiểm tra:
+  - 6.000 file ngẫu nhiên từ ba file tiến độ #1, #2, #3: tất cả đều có trong cache;
+  - với 25 API tensorflow còn thiếu, cache có đủ 75 truy vấn GitHub cũ và 50 truy vấn Sourcegraph cũ;
+  - chỉ chưa có các truy vấn mới: GitHub 21 + 18, Sourcegraph 18.
+- Trong thư mục còn `crawl_queue.ps1`, log và `tensorflow-repair-*` của máy kia. Chúng không ảnh hưởng gì.
 
 ## Các hướng còn lại (chưa được duyệt)
 - Đo xem bỏ các quy tắc trích xuất của bài báo sẽ thêm bao nhiêu mẫu. Bỏ chúng sẽ lệch với cách làm của bài báo. Các quy tắc:
@@ -127,14 +144,10 @@ Cách tính bảng:
 - Thêm các dòng lệnh cho pytorch nếu người dùng cần.
 
 ## Trạng thái file
-- `run_others.ps1` hiện chứa lượt chạy lại lệnh #3 cho tensorflow. **Chưa chạy.**
-  1. `--cached-only --reprocess`: lấp lại các ô bị trống ra sau khi bỏ trùng.
-  2. Tìm kiếm GitHub mới, cho các truy vấn mà code cũ thiếu.
+- `run_others.ps1` hiện chứa đợt tensorflow chạy ở **máy này**, với `--cache cache_tensorflow`. **Chưa chạy.**
+  1. Lệnh #3 rồi #2 với `--cached-only --reprocess`: đọc lại bằng luật mới, lấp lại các ô bị trống ra sau khi bỏ trùng. Không gọi API tìm kiếm.
+  2. Lệnh #3 (`--gh-interval 20`) rồi #2 với tìm kiếm mới: chỉ các truy vấn mới được gửi đi.
   3. `report --export`.
-- Cần chạy trên máy tensorflow (có `cache/`):
-  - cập nhật code mới nhất;
-  - chép `data/tensorflow/crawl/samples.jsonl` đã bỏ trùng sang;
-  - sửa `$py` cho đúng máy đó;
-  - chạy từng lệnh một;
-  - chạy xong thì chép `data/tensorflow/crawl/` về đây.
+- Chạy từng lệnh một, và đảm bảo không máy nào khác đang crawl bằng cùng token.
+- Chạy xong thì lập bảng tiến độ và so với bảng ở trên.
 - Đợt kế tiếp thì thay nội dung file bằng lệnh mới.

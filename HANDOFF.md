@@ -57,7 +57,7 @@
   - đợt notebook cho các thư viện còn thiếu;
   - lượt đọc lại cache pandas sau khi sửa lỗi `self`;
   - `report --export`.
-  - `AFTER.md` cập nhật lúc 09:43 ngày 2026-11-26.
+  - `API_MIGRATION_COUNTS_NEED.md` (trước đây tên là `AFTER.md`) cập nhật lúc 09:43 ngày 2026-11-26.
 - Dữ liệu: đã gỡ 7 mẫu `pd.DataFrame.pad(...)` khỏi `data/pandas/crawl/samples.jsonl` để gán lại.
   - 5 mẫu được nhận lại, gán đủ 1.1.0–2.3.3.
   - 2 mẫu thừa (ô đã đủ) chỉ còn trong bản sao lưu `data/pandas/crawl/samples.jsonl.bak-unbound-self`.
@@ -97,7 +97,7 @@ Kết quả đợt tensorflow ở máy này (2026-11-26, 10:59 → 21:58, có kh
   - Tensorflow U `saved_model.load`: 146 mẫu `cell_full`; hai ô 1.12/1.13.1 vẫn không khớp signature.
 - Lệnh #2 tìm mới (Sourcegraph, xong 21:58): 4 mẫu, đều từ `compat.v1.saved_model.load`. Mỗi API chỉ có khoảng 10–30 file.
 - Mẫu thứ 54 đến từ một lần chạy bị dừng giữa chừng, nên log không in dòng tổng kết của lần đó.
-- `report --export` đã chạy lúc 21:58: `manual_reviews/API_MIGRATION_COUNTS_AFTER.md`, `data/tensorflow/{O,U}_crawled.json`.
+- `report --export` đã chạy lúc 21:58: `manual_reviews/API_MIGRATION_COUNTS_NEED.md`, `data/tensorflow/{O,U}_crawled.json`.
 - Truy vấn GitHub mới chạy chậm: mỗi truy vấn khớp 800–9.000 file, phải chia theo `size:` và lấy từng trang. Mỗi request cách nhau 20 giây, nên một truy vấn mất 5–25 phút; `"saved_model.load"` mất khoảng 1 giờ.
 - Kết luận: các truy vấn `compat.v1` và `"<module>.<name>"` đã chạy hết, gần như cạn. Crawl thêm theo hướng truy vấn này cho tensorflow khó có thêm mẫu.
 

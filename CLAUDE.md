@@ -34,7 +34,7 @@ python -m llm_dep.crawling.run --libs numpy                              # Sourc
 python -m llm_dep.crawling.run --libs numpy --assign signature --cached-only --reprocess   # re-read cached files
 python -m llm_dep.crawling.run --libs numpy --source github --assign signature --search-limit 5000 --wait-on-block 30
 python -m llm_dep.crawling.run --libs scikit-learn --kinds O --source github --assign signature --notebooks --search-limit 20000 --wait-on-block 30 --gh-interval 20
-python -m llm_dep.crawling.report --export                               # AFTER.md + data/<lib>/{O,U}_crawled.json
+python -m llm_dep.crawling.report --export                               # NEED.md + data/<lib>/{O,U}_crawled.json
 ```
 
 `run_others.ps1` holds the current batch of commands for the non-pytorch/tensorflow libraries (those two are crawled

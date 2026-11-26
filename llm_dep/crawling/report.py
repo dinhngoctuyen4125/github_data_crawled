@@ -2,7 +2,7 @@
 
     python -m llm_dep.crawling.report [--export]
 
-Writes manual_reviews/API_MIGRATION_COUNTS_AFTER.md: an exact copy of the BEFORE file in which
+Writes manual_reviews/API_MIGRATION_COUNTS_NEED.md: an exact copy of the BEFORE file in which
 each U / O cell becomes `crawled/needed`, where needed = (max of the path, or --cap) - BEFORE
 count, and 0 when the API does not exist at that milestone. Samples of cells that BEFORE already
 filled are trimmed (unless --keep-extra). With --export also writes
@@ -24,7 +24,7 @@ def main():
     ap.add_argument("--data", default="data")
     ap.add_argument("--crawl", default="data", help="root holding <lib>/crawl/samples.jsonl")
     ap.add_argument("--before", default="manual_reviews/API_MIGRATION_COUNTS_BEFORE.md")
-    ap.add_argument("--out", default="manual_reviews/API_MIGRATION_COUNTS_AFTER.md")
+    ap.add_argument("--out", default="manual_reviews/API_MIGRATION_COUNTS_NEED.md")
     ap.add_argument("--cap", type=int, default=None)
     ap.add_argument("--export", action="store_true")
     ap.add_argument("--keep-extra", action="store_true",

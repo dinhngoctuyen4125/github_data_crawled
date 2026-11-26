@@ -5,7 +5,9 @@
 - Mục tiêu: crawl GitHub và Sourcegraph để thêm mẫu O (outdated) và U (up-to-dated), sao cho mỗi ô (mapping, U/O, milestone) đủ chỉ tiêu.
   - Chỉ tiêu của một ô = số lớn nhất trên evolution path của ô đó (hoặc `--cap`), trừ đi số đếm trong `manual_reviews/API_MIGRATION_COUNTS_BEFORE.md`.
   - Ô mà API không tồn tại ở milestone đó thì có chỉ tiêu 0.
-- pytorch và tensorflow do người dùng chạy trên máy khác (hướng dẫn ở `llm_dep/crawling/README.md`). Phiên này chỉ lo numpy, pandas, scikit-learn, scipy, seaborn, transformers.
+- pytorch và tensorflow do người dùng chạy trên máy khác (hướng dẫn ở `llm_dep/crawling/README.md`).
+  - Kết quả đã được chép về `data/pytorch/crawl/`, `data/tensorflow/crawl/`, kèm log `data/crawl_tensorflow.log`.
+  - Không có `cache/` của hai máy đó.
 
 ## Yêu cầu, ràng buộc và quyết định đã thống nhất
 - Luôn trả lời bằng tiếng Việt, đơn giản, dễ hiểu, dạng bullet, đủ ý, không lan man.
@@ -20,7 +22,11 @@
 - Bảng tiến độ:
   - dùng đúng các cột: Thư viện | Tập | Ô cần lấp | Ô đã lấp đủ | Lượt lấp ô / cần (kèm %);
   - nhóm theo thư viện, O trước U;
-  - không đưa pytorch và tensorflow vào bảng, không thêm dòng tổng.
+  - từ khi có dữ liệu ngoài thì đưa cả pytorch và tensorflow vào cuối bảng (tensorflow tính với `--cap 500`), không thêm dòng tổng.
+- Ba loại lệnh crawl (người dùng đặt tên):
+  - #1: Sourcegraph, truy vấn api_name + dependency, gán version theo dependency;
+  - #2: Sourcegraph, chỉ truy vấn api_name, gán theo signature;
+  - #3: GitHub, chỉ truy vấn api_name, gán theo signature.
 - Chạy bằng Python 3.11: `C:\Users\tuyen\AppData\Local\Programs\Python\Python311\python.exe`.
   - conda base là Python 3.13, không còn `lib2to3`; env `crawl` là Python 3.10, thiếu `tomllib`.
 
@@ -48,8 +54,12 @@
 - Dữ liệu: đã gỡ 7 mẫu `pd.DataFrame.pad(...)` khỏi `data/pandas/crawl/samples.jsonl` để gán lại.
   - 5 mẫu được nhận lại, gán đủ 1.1.0–2.3.3.
   - 2 mẫu thừa (ô đã đủ) chỉ còn trong bản sao lưu `data/pandas/crawl/samples.jsonl.bak-unbound-self`.
+- Dữ liệu tensorflow: đã bỏ 1.499 mẫu trùng khỏi `data/tensorflow/crawl/samples.jsonl` (9.940 → 8.441 dòng).
+  - Bản sao lưu: `data/tensorflow/crawl/samples.jsonl.bak-dup`.
+  - Nguyên nhân (theo `data/crawl_tensorflow.log`): lệnh #3 từng chạy **hai tiến trình song song**. Có 890 dòng log lặp lại, hai dòng `tensorflow done` cùng lúc 07:13:53 ngày 25. Mỗi mẫu bị ghi hai lần liền nhau, cùng repo và path.
+  - pytorch không bị trùng.
 
-## Tiến độ hiện tại (2026-11-26 09:43)
+## Tiến độ hiện tại (2026-11-26, sau khi bỏ trùng tensorflow)
 | Thư viện | Tập | Ô cần lấp | Ô đã lấp đủ | Lượt lấp ô / cần |
 |---|---|---|---|---|
 | numpy | O | 21 | 21 (100%) | 18,827/18,827 (100%) |
@@ -64,9 +74,13 @@
 | seaborn | U | 15 | 7 (47%) | 834/4,651 (17.9%) |
 | transformers | O | 44 | 36 (82%) | 36/44 (81.8%) |
 | transformers | U | 218 | 218 (100%) | 603/603 (100%) |
+| pytorch | O | 129 | 60 (47%) | 46,112/88,964 (51.8%) |
+| pytorch | U | 61 | 61 (100%) | 6,573/6,573 (100%) |
+| tensorflow | O | 349 | 178 (51%) | 26,977/68,089 (39.6%) |
+| tensorflow | U | 39 | 33 (85%) | 290/842 (34.4%) |
 
 Cách tính bảng:
-- Script tạm: `C:\Users\tuyen\AppData\Local\Temp\claude\dc8dc83bc3ce8279\1eeb09e3-f8d8-43be-9e0f-3fdb399b714c\scratchpad\fill.py`. Thư mục này có thể bị xoá.
+- Script tạm: `C:\Users\tuyen\AppData\Local\Temp\claude\dc8dc83bc3ce8279\1eeb09e3-f8d8-43be-9e0f-3fdb399b714c\scratchpad\fill_all.py`. Script này có cap riêng cho từng thư viện (tensorflow 500). Thư mục scratchpad có thể bị xoá.
 - Chạy bằng `PYTHONIOENCODING=utf-8 PYTHONPATH=. python <path>`.
 - Logic:
   - dựng `Quota(ev, parse_counts_md(BEFORE), baseline="existing")`;
@@ -88,6 +102,21 @@ Cách tính bảng:
 - seaborn U (`utils.despine`): mẫu U chủ yếu nằm trong chính mã nguồn seaborn, còn người dùng viết `sns.despine()` (được tính là O). Gần như không lấp thêm được.
 - Đợt notebook đã thêm mẫu: sklearn O 90, seaborn O 11, seaborn U 3, scipy O 5, pandas O 1. Sourcegraph gần như không có notebook.
 
+## pytorch và tensorflow: vì sao còn thiếu nhiều (đã kiểm tra)
+- Nguyên nhân chung: chỉ tiêu lấy theo số lớn nhất của **cả U lẫn O** trên path ([quota.py:40](llm_dep/crawling/quota.py#L40)). Khi API thay thế rất phổ biến, ô O phải đạt bằng con số đó, dù API cũ hiếm.
+  - Có thể đổi chỉ tiêu ô O thành số lớn nhất của riêng dòng O, nhưng đó là đổi cách làm. Người dùng chưa quyết định.
+- pytorch O (thiếu 42.852 lượt):
+  - 94% đến từ `upsample_nearest` (thiếu 25.805, có 58 mẫu) và `upsample_bilinear` (thiếu 14.518);
+  - `interpolate` (U) có 1.209–1.283 mẫu trong BEFORE, nên chỉ tiêu mỗi ô O là 1.283; dữ liệu gốc O chỉ có 52 và 217 mẫu;
+  - mọi milestone thiếu như nhau, tức là do ít lời gọi, không phải do chữ ký.
+- tensorflow O:
+  - 98% đến từ 9 mapping `to_*` → `tf.cast`;
+  - `tf.cast` có 3.341 mẫu U, nên chỉ tiêu bị chặn ở cap 500 mỗi ô; dữ liệu gốc O chỉ có 0–39 mẫu.
+- tensorflow U: chỉ thiếu `tf.saved_model.load` ở 1.12.0 và 1.13.1, dùng chung cho 3 mapping (nên số thiếu bị đếm 3 lần).
+  - Ở hai bản này chữ ký là `load(sess, tags, export_dir, ...)`, còn `load(path)` chỉ khớp từ 2.0.
+- Lệnh #3 của tensorflow đã chạy hết, không có `skipped size slice`, rate limit đều được chờ.
+  - Máy tensorflow chạy code cũ (trước commit `6e45c21`), thiếu truy vấn thứ tư dạng `"v1.to_double"`, `"saved_model.load"`.
+
 ## Các hướng còn lại (chưa được duyệt)
 - Đo xem bỏ các quy tắc trích xuất của bài báo sẽ thêm bao nhiêu mẫu. Bỏ chúng sẽ lệch với cách làm của bài báo. Các quy tắc:
   - mỗi file chỉ lấy 1 khối lệnh rời;
@@ -98,5 +127,14 @@ Cách tính bảng:
 - Thêm các dòng lệnh cho pytorch nếu người dùng cần.
 
 ## Trạng thái file
-- `run_others.ps1` hiện chứa lượt đọc lại cache pandas (đã chạy xong).
+- `run_others.ps1` hiện chứa lượt chạy lại lệnh #3 cho tensorflow. **Chưa chạy.**
+  1. `--cached-only --reprocess`: lấp lại các ô bị trống ra sau khi bỏ trùng.
+  2. Tìm kiếm GitHub mới, cho các truy vấn mà code cũ thiếu.
+  3. `report --export`.
+- Cần chạy trên máy tensorflow (có `cache/`):
+  - cập nhật code mới nhất;
+  - chép `data/tensorflow/crawl/samples.jsonl` đã bỏ trùng sang;
+  - sửa `$py` cho đúng máy đó;
+  - chạy từng lệnh một;
+  - chạy xong thì chép `data/tensorflow/crawl/` về đây.
 - Đợt kế tiếp thì thay nội dung file bằng lệnh mới.

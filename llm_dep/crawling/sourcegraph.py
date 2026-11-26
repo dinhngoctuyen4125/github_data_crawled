@@ -54,6 +54,11 @@ def api_queries(api: str, method_only: bool = False) -> List[str]:
         queries.append(" ".join(kw))
         if method_only and len(parts) >= 3 and parts[-2][:1].isupper():
             queries.append(f"{top} .{parts[-1]}(")
+    if "compat" in parts[1:-1] and parts.index("compat") + 2 < len(parts):
+        # `tf1 = tf.compat.v1; tf1.to_double(`: inserted before the last query, which run.py reuses for the
+        # dependency-targeted queries (their cached searches stay valid)
+        i = parts.index("compat")
+        queries.insert(len(queries) - 1, f"{parts[i]}.{parts[i + 1]} .{'.'.join(parts[i + 2:])}(")
     return queries
 
 

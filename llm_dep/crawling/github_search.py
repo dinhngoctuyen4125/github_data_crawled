@@ -59,6 +59,10 @@ def gh_queries(api: str, method_only: bool = False, notebooks: bool = False) -> 
             queries.append(f'"{".".join(parts[:-1])}" {parts[-1]} {lang}')
             if len(parts) >= 3:                                                        # `from pkg import module; module.name(`
                 queries.append(f'"{parts[-2]}.{parts[-1]}" {lang}')
+    if "compat" in parts[1:-1]:          # `tf1 = tf.compat.v1; tf1.to_double(`: neither `tensorflow.compat.v1` nor
+        i = parts.index("compat")        # `tf.compat.v1.to_double` is in the file
+        if i + 1 < len(parts) - 1:
+            queries.append(f'"{parts[i]}.{parts[i + 1]}" {" ".join(parts[i + 2:])} {lang}')
     return list(dict.fromkeys(queries))
 
 

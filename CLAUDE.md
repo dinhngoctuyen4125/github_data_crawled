@@ -56,7 +56,8 @@ call sites → assign library versions → accept the sample only for (mapping, 
   (REST code search, ≤1000 results/query so queries are bisected by `size:`; ~10 req/min).
 - **Extraction** (`extract.py`): `CallSiteMatcher` extends `data_collection/api_matcher.APIMatcher`. It keeps the
   earliest matching call per function so the prompt never contains the target API. It also handles indexers
-  (`df.loc[...]`), pandas type inference (`pandas_types.py`), `Cls.from_pretrained`, relative imports inside copies
+  (`df.loc[...]`), pandas type inference (`pandas_types.py`), `Cls.from_pretrained`, module-level aliases by
+  assignment (`tf1 = tf.compat.v1`), unbound method calls `Cls.method(obj, ...)` (`signature.py`), relative imports inside copies
   of the library (package inferred from the file path), and Python 2 files (lib2to3 syntax fixers only, text mapped
   back 1:1 to original lines). Like the original study, a sample is a function/method or a block of up to 5
   module-level statements (`match_script_stmts`).

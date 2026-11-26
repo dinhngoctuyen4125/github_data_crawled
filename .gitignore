@@ -12,6 +12,7 @@
 !/data/**/migration_evolution.json
 
 /cache/
+/cache_tensorflow/
 /.env
 /data/**/*.progress.jsonl
 /data/**/*.cache.jsonl

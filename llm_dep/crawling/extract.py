@@ -15,6 +15,7 @@ from llm_dep.data_collection.api_matcher import APIMatcher
 from llm_dep.utils.source_utils import extract_first_statement
 
 from .pandas_types import PandasTypes
+from .signature import _dotted
 
 
 class CallSiteMatcher(APIMatcher):
@@ -38,19 +39,33 @@ class CallSiteMatcher(APIMatcher):
         """APIMatcher.solve_imports, plus relative imports (`from . import utils`, `from ..utils import despine`)
         resolved against `self.package`; without it they stay unresolved as before."""
         super().solve_imports()
-        if not self.package:
-            return
-        pkg = self.package.split(".")
-        for node in ast.walk(self.tree):
-            if not isinstance(node, ast.ImportFrom) or not node.level or node.level > len(pkg):
+        if self.package:
+            pkg = self.package.split(".")
+            for node in ast.walk(self.tree):
+                if not isinstance(node, ast.ImportFrom) or not node.level or node.level > len(pkg):
+                    continue
+                base = ".".join(pkg[:len(pkg) - node.level + 1])
+                mod = f"{base}.{node.module}" if node.module else base
+                for nn in node.names:
+                    if nn.name == "*":
+                        self.import_dict[mod] = mod
+                    else:
+                        self.import_dict[nn.asname or nn.name] = f"{mod}.{nn.name}"
+        self._module_assignments()
+
+    def _module_assignments(self):
+        """Module-level aliases made by assignment instead of import: `tf1 = tf.compat.v1`, `v1 = tf.compat.v1`,
+        `tf = tf.compat.v1` (rebinds `tf`), `GMM = mixture.GMM`. The right side must be a plain dotted name whose
+        head is already imported; assignments are applied in source order."""
+        for node in self.tree.body:
+            if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
                 continue
-            base = ".".join(pkg[:len(pkg) - node.level + 1])
-            mod = f"{base}.{node.module}" if node.module else base
-            for nn in node.names:
-                if nn.name == "*":
-                    self.import_dict[mod] = mod
-                else:
-                    self.import_dict[nn.asname or nn.name] = f"{mod}.{nn.name}"
+            src = _dotted(node.value)
+            if not src or "." not in src:
+                continue
+            head, rest = src.split(".", 1)
+            if head in self.import_dict:
+                self.import_dict[node.targets[0].id] = f"{self.import_dict[head]}.{rest}"
 
     def _resolve(self, name: str, ref_dict: dict) -> str:
         parts = name.split(".")

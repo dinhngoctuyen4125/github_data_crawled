@@ -1,23 +1,8 @@
-"""Conservative type inference for pandas receivers (opt-in with --infer-types).
-
-APIMatcher only knows a variable's type when it is assigned from a capitalised call such as
-`df = pd.DataFrame(...)`. This module also recognises expressions whose type is certain:
-
-1. pandas readers / constructors that always return a DataFrame (`pd.read_csv`, `pd.merge`...),
-   except when they return iterators or dicts (`chunksize=`, `iterator=True`,
-   `read_excel(sheet_name=None | [...])`);
-2. DataFrame / Series methods that return the same type (`df.copy()`, `df.dropna()`...),
-   except with `inplace=True` (returns None);
-3. `df["col"]` with a constant string key -> Series;
-4. `df.style` and Styler methods that return a Styler -> Styler;
-5. parameters annotated `pd.DataFrame` / `pd.Series`, and `df.T`.
-
-Deliberately excluded (may return another type): pd.concat, read_json, read_hdf, read_pickle,
-read_html, df.apply, df.col attribute access, groupby(...).agg(...).
-A variable takes the type of its latest assignment before the call line in the same scope.
-"""
+"""Conservative type inference for pandas receivers (opt-in with --infer-types)."""
 import ast
 from typing import Dict, List, Optional, Tuple
+
+from .signature import walk_stmts
 
 DF, SERIES, STYLER = "pandas.DataFrame", "pandas.Series", "pandas.io.formats.style.Styler"
 
@@ -56,6 +41,22 @@ def _is_true(node) -> bool:
 
 
 class PandasTypes:
+    """APIMatcher only knows a variable's type when it is assigned from a capitalised call such as
+    `df = pd.DataFrame(...)`. It also recognises expressions whose type is certain:
+
+    1. pandas readers / constructors that always return a DataFrame (`pd.read_csv`, `pd.merge`...),
+       except when they return iterators or dicts (`chunksize=`, `iterator=True`,
+       `read_excel(sheet_name=None | [...])`);
+    2. DataFrame / Series methods that return the same type (`df.copy()`, `df.dropna()`...),
+       except with `inplace=True` (returns None);
+    3. `df["col"]` with a constant string key -> Series;
+    4. `df.style` and Styler methods that return a Styler -> Styler;
+    5. parameters annotated `pd.DataFrame` / `pd.Series`, and `df.T`.
+
+    Deliberately excluded (may return another type): pd.concat, read_json, read_hdf, read_pickle,
+    read_html, df.apply, df.col attribute access, groupby(...).agg(...).
+    A variable takes the type of its latest assignment before the call line in the same scope.
+    """
     def __init__(self, matcher, scope: ast.AST):
         self.m = matcher
         self.assigns: Dict[str, List[Tuple[int, ast.AST]]] = {}
@@ -66,7 +67,7 @@ class PandasTypes:
                 t = self._annotation(a.annotation)
                 if t:
                     self.params[a.arg] = t
-        for node in ast.walk(scope):
+        for node in walk_stmts(scope):
             target, value = None, None
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
                 target, value = node.targets[0].id, node.value

@@ -1,30 +1,12 @@
-"""Statistics of crawled samples per evolution cell, and export to O/U json files.
-
-    python -m llm_dep.crawling.report [--export]
-
-Writes manual_reviews/API_MIGRATION_COUNTS_NEED.md: an exact copy of the BEFORE file in which
-each U / O cell becomes `crawled/needed`, where needed = (max of the path, or --cap) - BEFORE
-count, and 0 when the API does not exist at that milestone. Samples of cells that BEFORE already
-filled are trimmed (unless --keep-extra).
-
-Writes manual_reviews/API_MIGRATION_COUNTS_AFTER.md, the final counts: the same copy of the BEFORE
-file in which each U / O cell becomes BEFORE + kept crawled samples (`-` when the API does not
-exist at that milestone), and each `dep → rep` line also shows the largest U / O cell of BEFORE
-(one sample covers several milestones, so a final cell can exceed it).
-
-With --export also writes data/<lib>/O_crawled.json and U_crawled.json (the kept samples).
-"""
+"""Count crawled samples per cell, write the NEED / AFTER tables and export the O/U json files."""
 import argparse
 import collections
 import json
-import re
 from pathlib import Path
 
 from .evolution import LIBS, Evolution
-from .quota import Quota, parse_counts_md
+from .quota import PAIR, Quota, cells_of, parse_counts_md, table_row
 from .run import load_jsonl
-
-PAIR = re.compile(r"^(\S+) → (\S+)\s*$")
 
 
 def rewrite_counts(before: Path, ev: Evolution, cell_text, header_text=None) -> str:
@@ -34,12 +16,12 @@ def rewrite_counts(before: Path, ev: Evolution, cell_text, header_text=None) -> 
     eol = "\r\n" if "\r\n" in text else "\n"
     out_lines, cur, versions = [], None, None
     for line in text.split(eol):
-        if PAIR.match(line):
-            cur, versions = ev.by_deprecated.get(PAIR.match(line).group(1)), None
+        if m := PAIR.match(line):
+            cur, versions = ev.by_deprecated.get(m.group(1)), None
             if header_text and cur is not None:
                 line = header_text(cur, line)
         elif cur is not None and line.startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            cells = table_row(line)
             if cells[0] == "Version":
                 versions = cells[1:]
             elif cells[0] in ("U", "O") and versions:
@@ -50,37 +32,33 @@ def rewrite_counts(before: Path, ev: Evolution, cell_text, header_text=None) -> 
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data", default="data")
     ap.add_argument("--crawl", default="data", help="root holding <lib>/crawl/samples.jsonl")
     ap.add_argument("--before", default="manual_reviews/API_MIGRATION_COUNTS_BEFORE.md")
-    ap.add_argument("--out", default="manual_reviews/API_MIGRATION_COUNTS_NEED.md")
+    ap.add_argument("--out", default="manual_reviews/API_MIGRATION_COUNTS_NEED.md",
+                    help="each cell = `crawled/needed` (needed = target - BEFORE, 0 when the API is absent)")
     ap.add_argument("--after", default="manual_reviews/API_MIGRATION_COUNTS_AFTER.md",
-                    help="final counts: BEFORE + kept crawled samples")
+                    help="final counts: BEFORE + kept crawled samples (`-` when the API is absent), "
+                         "each pair line with the largest U / O cell of BEFORE")
     ap.add_argument("--cap", type=int, default=None)
-    ap.add_argument("--export", action="store_true")
+    ap.add_argument("--min-target", type=int, default=0, help="same value as the crawl (run.py --min-target)")
+    ap.add_argument("--export", action="store_true", help="also write data/<lib>/{O,U}_crawled.json (kept samples)")
     ap.add_argument("--keep-extra", action="store_true",
                     help="keep samples of cells that BEFORE already filled (default: trim them)")
     args = ap.parse_args()
 
-    data = Path(args.data)
-    ev = Evolution(data)
-    quota = Quota(ev, parse_counts_md(Path(args.before), ev), cap=args.cap, baseline="existing")
-
-    def need(cell):
-        """Samples to crawl on top of BEFORE to reach the cell target (0 when the API does not
-        exist at that milestone or BEFORE already reaches the target)."""
-        if not quota.feasible(cell):
-            return 0
-        return max(0, quota.target[cell[0]] - quota.before[cell[0]][cell[1]].get(cell[2], 0))
+    ev = Evolution(Path(args.data))
+    before = Path(args.before)
+    quota = Quota(ev, parse_counts_md(before, ev), cap=args.cap, baseline="existing", min_target=args.min_target)
 
     samples, dropped = {}, collections.Counter()
     for lib in LIBS:
         kept = []
         for s in load_jsonl(Path(args.crawl) / lib / "crawl" / "samples.jsonl"):
-            cells = [(a["mapping_id"], s["kind"], a["milestone"]) for a in s["assignments"]]
+            cells = cells_of(s["kind"], s["assignments"])
             # keep a sample (in crawl order) only while one of its cells still needs samples
-            if args.keep_extra or any(quota.filled[c] < need(c) for c in cells):
+            if args.keep_extra or any(quota.deficit(c) > 0 for c in cells):
                 quota.add(cells)
                 kept.append(s)
             else:
@@ -97,20 +75,13 @@ def main():
             print(f"{lib:14} {c['dependency', 'O']:>7}/{c['dependency', 'U']:<7} "
                   f"{c['signature', 'O']:>7}/{c['signature', 'U']:<7} {ver:>20}")
 
-    # Same file as BEFORE, only the numbers of the U / O rows are replaced.
-    before = Path(args.before)
-    Path(args.out).write_text(rewrite_counts(before, ev, lambda c: f"{quota.filled[c]}/{need(c)}"),
+    Path(args.out).write_text(rewrite_counts(before, ev, lambda c: f"{quota.filled[c]}/{quota.need(c)}"),
                               encoding="utf-8")
-    total = quota.total_deficit()
-    print(f"wrote {args.out}; remaining deficit (cap={args.cap}) {total}")
+    print(f"wrote {args.out}; remaining deficit (cap={args.cap}, min-target={args.min_target}) "
+          f"{quota.total_deficit()}")
 
-    def final(cell):
-        return str(quota.have(cell)) if quota.feasible(cell) else "-"
-
-    def with_max(path, line):
-        kinds = quota.before[path.mapping_id]
-        return f"{line.rstrip()} (max BEFORE = {max(max(c.values(), default=0) for c in kinds.values())})"
-
+    final = lambda c: str(quota.have(c)) if quota.feasible(c) else "-"
+    with_max = lambda path, line: f"{line.rstrip()} (max BEFORE = {quota.max_before[path.mapping_id]})"
     Path(args.after).write_text(rewrite_counts(before, ev, final, with_max), encoding="utf-8")
     print(f"wrote {args.after}")
 

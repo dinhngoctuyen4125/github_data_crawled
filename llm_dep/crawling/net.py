@@ -26,6 +26,10 @@ def load_dotenv(path: Path = Path(".env")):
         os.environ.setdefault(k.strip(), v.strip().strip("'\""))
 
 
+def sourcegraph_token() -> Optional[str]:
+    return os.environ.get("SRC_ACCESS_TOKEN") or os.environ.get("SOURCEGRAPH_TOKEN")
+
+
 def get(url: str, headers: Optional[dict] = None, params: Optional[dict] = None, timeout: int = 60,
         retries: int = 4, stream: bool = False, ok_404: bool = True,
         max_delay: float = 300) -> Optional[requests.Response]:
@@ -78,9 +82,7 @@ class DiskCache:
         p = self._path(key)
         try:
             return p.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return None
-        except (PermissionError, OSError):     # being replaced by another thread right now
+        except OSError:                        # missing, or being replaced by another thread right now
             return None
 
     def put(self, key: str, value: str):

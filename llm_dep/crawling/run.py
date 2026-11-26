@@ -1,23 +1,4 @@
-"""Crawl GitHub (via Sourcegraph) until every feasible (mapping, U/O, milestone) cell has as many
-samples as the largest cell of its evolution path.
-
-    python -m llm_dep.crawling.run --libs numpy --plan            # show deficits only
-    python -m llm_dep.crawling.run --libs numpy pandas            # crawl
-    python -m llm_dep.crawling.report                             # stats + export
-
-Two assignment branches share one samples.jsonl and one quota:
-  --assign dependency (default): versions from the repository's dependency declaration at the
-      commit ([v1, v2) of the evolution path, both bounds required) + signature check;
-  --assign signature: fallback for cells the first branch could not fill; versions = every
-      milestone where the api_call binds to the API signature (like the original O/U data).
-      Dependency queries are skipped; the dependency is still recorded when it resolves.
-    python -m llm_dep.crawling.run --libs numpy --assign signature --cached-only   # re-use crawled files
-    python -m llm_dep.crawling.run --libs numpy --assign signature                 # crawl more
-    python -m llm_dep.crawling.run --libs numpy --assign signature --notebooks     # search .ipynb files
-
-Tokens (env or .env): SRC_ACCESS_TOKEN (Sourcegraph), GITHUB_TOKEN (tree listing + commit dates;
-without it dependency files are probed at fixed paths and commit dates are unknown).
-"""
+"""Crawl Sourcegraph / GitHub code search until every feasible (mapping, U/O, milestone) cell reaches its target."""
 import argparse
 import collections
 import hashlib
@@ -38,7 +19,7 @@ from .extract import extract_sites, notebook_to_script
 from .github import GitHub
 from .github_search import GitHubSearch, gh_queries
 from .pypi import Releases
-from .quota import Quota, parse_counts_md
+from .quota import Quota, cells_of, parse_counts_md
 from .signature import compatible, parse_call
 from .sourcegraph import VENDORED, SearchUnavailable, Sourcegraph, api_queries, dependency_predicate, minor_groups
 from .versions import VersionResolver, place
@@ -73,7 +54,8 @@ class Crawler:
                               notebooks=args.notebooks)
         self.searcher = self.sg if args.source == "sourcegraph" else GitHubSearch(cache, min_interval=args.gh_interval, cached_only=args.cached_only)
         self.resolver = VersionResolver(self.gh, self.releases, use_commit_date=not args.no_commit_date)
-        self.quota = Quota(self.ev, parse_counts_md(Path(args.before), self.ev), cap=args.cap, baseline=args.baseline)
+        self.quota = Quota(self.ev, parse_counts_md(Path(args.before), self.ev), cap=args.cap, baseline=args.baseline,
+                           min_target=args.min_target)
         self.indexer_apis = {
             st.name for p in self.ev.paths.values() for ms in p.states.values() for st in ms.values()
             if st.call_syntax and st.call_syntax.get("kind") == "indexer"
@@ -98,7 +80,7 @@ class Crawler:
             return self.processed[lib]
         for s in load_jsonl(self.out_dir(lib) / "samples.jsonl"):
             self.seen_funcs.add(func_key(s["function"]))
-            self.quota.add([(a["mapping_id"], s["kind"], a["milestone"]) for a in s["assignments"]])
+            self.quota.add(cells_of(s["kind"], s["assignments"]))
         self.processed[lib] = set() if self.args.reprocess else \
             {tuple(x) for x in load_jsonl(self.progress_file(lib))}
         return self.processed[lib]
@@ -166,10 +148,13 @@ class Crawler:
 
     def _queries(self, lib, kind, target, paths):
         """Dependency-targeted queries for open cells first (oldest first), then broad queries."""
-        method_only = self.args.infer_types and lib == "pandas"
+        method_only = self._infer_types(lib)
         if self.args.source == "github":            # no repo:has.file on GitHub: API-name queries only
             return gh_queries(target, method_only=method_only, notebooks=self.args.notebooks)
         base = api_queries(target, method_only=method_only)
+        # The signature branch does not use the dependency, so targeting repositories by it is pointless.
+        if self.args.no_targeted or self.args.assign == "signature":
+            return base
         targeted, seen = [], set()
         releases = self.releases.versions(lib)
         for p in paths:
@@ -183,10 +168,11 @@ class Crawler:
                         continue
                     seen.add(minor)
                     targeted.append((Version(minor), f"{dependency_predicate(lib, minor)} {base[-1]}"))
-        uniq = [q for _, q in sorted(targeted)]
-        # The signature branch does not use the dependency, so targeting repositories by it is pointless.
-        skip = self.args.no_targeted or self.args.assign == "signature"
-        return ([] if skip else uniq) + base
+        return [q for _, q in sorted(targeted)] + base
+
+    def _infer_types(self, lib) -> bool:
+        """--infer-types only acts on pandas (queries by method name + receiver type inference)."""
+        return self.args.infer_types and lib == "pandas"
 
     def _analyze(self, lib, target, hit) -> Tuple[str, list, object]:
         """Thread-safe part: download, extract call sites, resolve the dependency version."""
@@ -204,7 +190,7 @@ class Crawler:
                 if code is None:
                     return "not_a_notebook", [], None
             sites = [s for s in extract_sites(code, [target], self.indexer_apis & {target},
-                                                infer_types=self.args.infer_types and lib == "pandas",
+                                                infer_types=self._infer_types(lib),
                                                 from_pretrained=self.args.allow_from_pretrained, path=hit.path)
                      if s["matched api"] == target]
             if not sites:
@@ -233,7 +219,7 @@ class Crawler:
             if not assignments:
                 self.stats[f"rejected_{collections.Counter(reasons).most_common(1)[0][0]}"] += 1
                 continue
-            cells = [(a["mapping_id"], kind, a["milestone"]) for a in assignments]
+            cells = cells_of(kind, assignments)
             if not any(self.quota.deficit(c) > 0 for c in cells):
                 self.stats["cell_full"] += 1
                 continue
@@ -311,10 +297,11 @@ class Crawler:
             deprecated, replacement, expected = [target], paths[0].replacement_api, paths[0].replacement_api
         else:
             deprecated, replacement, expected = sorted(p.deprecated_api for p in paths), target, site["call name"]
+        versions = sorted({a["milestone"] for a in assignments}, key=Version)
         if self.args.assign == "signature":
             dep_check = self._dependency_check(target, paths, res, assignments)
         else:
-            dep_check = {"verified": True, "reason": "ok", "milestones": sorted({a["milestone"] for a in assignments}, key=Version)}
+            dep_check = {"verified": True, "reason": "ok", "milestones": versions}
         ok_res = res is not None and res.status == "ok"
         return {
             "function": site["function"],
@@ -331,7 +318,7 @@ class Crawler:
             "type_inference": site.get("type inference"),
             "kind": kind,
             "assignments": assignments,
-            "versions": sorted({a["milestone"] for a in assignments}, key=Version),
+            "versions": versions,
             "repository": hit.repo,
             "commit": hit.commit,
             "path": hit.path,
@@ -360,6 +347,8 @@ def main():
                     help="strict: all versions allowed by the dependency spec must lie in one [v1,v2); "
                          "latest: use the newest allowed version at commit time")
     ap.add_argument("--cap", type=int, default=None, help="upper bound for the per-cell target")
+    ap.add_argument("--min-target", type=int, default=0,
+                    help="lower bound for the per-cell target (applied before --cap), e.g. 100")
     ap.add_argument("--baseline", default="existing", choices=["none", "existing"],
                     help="existing: count the BEFORE numbers as already filled")
     ap.add_argument("--search-limit", type=int, default=2000, help="max results of a broad query")

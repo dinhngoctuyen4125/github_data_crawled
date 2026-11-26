@@ -1,13 +1,11 @@
-"""Check that GITHUB_TOKEN and SRC_ACCESS_TOKEN (env or .env) work. Never prints the tokens.
-
-    python -m llm_dep.crawling.check
-"""
+"""Check that GITHUB_TOKEN and SRC_ACCESS_TOKEN (env or .env) work. Never prints the tokens."""
 import os
 import sys
 
 import requests
 
 from . import net
+from .sourcegraph import STREAM_URL
 
 
 def main():
@@ -27,7 +25,7 @@ def main():
             core = r.json()["resources"]["core"]
             print(f"[GitHub]      OK: còn {core['remaining']}/{core['limit']} request trong giờ này")
 
-    sg = os.environ.get("SRC_ACCESS_TOKEN") or os.environ.get("SOURCEGRAPH_TOKEN")
+    sg = net.sourcegraph_token()
     if not sg:
         print("[Sourcegraph] THIẾU: chưa có SRC_ACCESS_TOKEN trong .env"); ok = False
     else:
@@ -44,7 +42,7 @@ def main():
         else:
             print("[Sourcegraph] LỖI: token không hợp lệ hoặc không kết nối được"); ok = False
         try:
-            r = requests.get("https://sourcegraph.com/.api/search/stream", timeout=120,
+            r = requests.get(STREAM_URL, timeout=120,
                              headers={"Accept": "text/event-stream", "Authorization": f"token {sg}"},
                              params={"q": "context:global lang:python count:1 numpy .prod(", "v": "V3", "t": "keyword"})
             searchable = r.ok and "text/event-stream" in r.headers.get("Content-Type", "")

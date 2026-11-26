@@ -1,7 +1,4 @@
-"""Regression check: recompute `versions` of the existing O/U samples with signature.compatible.
-
-    python -m llm_dep.crawling.selfcheck [--data data] [--lenient-starred]
-"""
+"""Regression check: recompute `versions` of the existing O/U samples with signature.compatible."""
 import argparse
 import collections
 import json

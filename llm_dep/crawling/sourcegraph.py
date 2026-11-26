@@ -1,8 +1,6 @@
-"""Sourcegraph streaming search: API-usage queries, optionally restricted to repositories whose
-dependency declarations mention a given library version (`repo:has.file(content:...)`)."""
+"""Sourcegraph streaming search and the API-usage queries sent to it."""
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -11,6 +9,7 @@ from typing import Iterable, List
 from packaging.version import Version
 
 from . import net
+from .signature import is_method
 
 STREAM_URL = "https://sourcegraph.com/.api/search/stream"
 
@@ -47,12 +46,12 @@ def api_queries(api: str, method_only: bool = False) -> List[str]:
     if len(parts) >= 2:
         if parts[-1][:1].isupper():                           # class: module + Class(
             kw = [".".join(parts[:-1]), f"{parts[-1]}("]
-        elif len(parts) >= 3 and parts[-2][:1].isupper():     # method: module Class .method(
+        elif is_method(api):                                  # method: module Class .method(
             kw = [".".join(parts[:-2]), parts[-2], f".{parts[-1]}("]
         else:                                                  # function: module .func(
             kw = [".".join(parts[:-1]), f".{parts[-1]}("]
         queries.append(" ".join(kw))
-        if method_only and len(parts) >= 3 and parts[-2][:1].isupper():
+        if method_only and is_method(api):
             queries.append(f"{top} .{parts[-1]}(")
     if "compat" in parts[1:-1] and parts.index("compat") + 2 < len(parts):
         # `tf1 = tf.compat.v1; tf1.to_double(`: inserted before the last query, which run.py reuses for the
@@ -100,7 +99,7 @@ class Sourcegraph:
         self.cache = cache
         self.cached_only = cached_only       # never send new searches (re-evaluate cached ones only)
         self.lang = r"file:\.ipynb$" if notebooks else "lang:python"     # notebooks: search .ipynb files
-        self.token = os.environ.get("SRC_ACCESS_TOKEN") or os.environ.get("SOURCEGRAPH_TOKEN")
+        self.token = net.sourcegraph_token()
         self.min_interval = min_interval     # seconds between two uncached searches
         self._last = 0.0
 

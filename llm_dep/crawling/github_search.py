@@ -1,18 +1,4 @@
-"""GitHub Code Search (REST `/search/code`) as a second search source next to Sourcegraph.
-
-GitHub indexes far more public repositories than sourcegraph.com, but:
-  * at most 1000 results per query (10 pages x 100): larger result sets are split by file size
-    (`size:lo..hi`, bisected until every slice has <= 1000 results);
-  * ~10 searches per minute with a token: requests are spaced by `min_interval` seconds and
-    rate-limit answers (403/429, Retry-After, X-RateLimit-Reset) are waited out;
-  * no regex / `repo:has.file(...)`, punctuation such as `(` is ignored: queries are by API name only;
-  * only the default branch is indexed (html_url carries the commit sha of that branch).
-Every result page and every finished query are cached, so interrupted searches resume.
-A size slice that GitHub keeps answering with 5xx/408 (search timeout on very common terms) is
-split further; a slice that still fails when it is MIN_SLICE bytes wide, or that gets an unexpected
-4xx, is skipped with a warning, and the query result is then not frozen in the cache, so a later
-run retries the skipped slices.
-"""
+"""GitHub REST code search (`/search/code`), the second search source next to Sourcegraph."""
 import logging
 import math
 import os
@@ -67,6 +53,20 @@ def gh_queries(api: str, method_only: bool = False, notebooks: bool = False) -> 
 
 
 class GitHubSearch:
+    """GitHub indexes far more public repositories than sourcegraph.com, but:
+      * at most 1000 results per query (10 pages x 100): larger result sets are split by file size
+        (`size:lo..hi`, bisected until every slice has <= 1000 results);
+      * ~10 searches per minute with a token: requests are spaced by `min_interval` seconds and
+        rate-limit answers (403/429, Retry-After, X-RateLimit-Reset) are waited out;
+      * no regex / `repo:has.file(...)`, punctuation such as `(` is ignored: queries are by API name only;
+      * only the default branch is indexed (html_url carries the commit sha of that branch).
+    Every result page and every finished query are cached, so interrupted searches resume.
+    A size slice that GitHub keeps answering with 5xx/408 (search timeout on very common terms) is
+    split further; a slice that still fails when it is MIN_SLICE bytes wide, or that gets an unexpected
+    4xx, is skipped with a warning, and the query result is then not frozen in the cache, so a later
+    run retries the skipped slices.
+    """
+
     def __init__(self, cache: net.DiskCache, min_interval: float = 6.5, cached_only: bool = False):
         self.cache = cache
         self.cached_only = cached_only

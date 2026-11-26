@@ -1,9 +1,4 @@
-"""Find and parse a repository's dependency declarations for one library.
-
-Supported: requirements*.txt (and requirements/*.txt), pyproject.toml (PEP 621, Poetry,
-dependency-groups), setup.py, setup.cfg, Pipfile, Pipfile.lock, poetry.lock, uv.lock,
-environment.yml (conda + pip section).
-"""
+"""Find and parse a repository's dependency declarations (requirements, pyproject, setup.py/cfg, Pipfile, lock files, environment.yml)."""
 import ast
 import configparser
 import json

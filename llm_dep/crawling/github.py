@@ -32,7 +32,7 @@ class GitHub:
         return h
 
     def _sourcegraph_raw(self, repo, commit, path):
-        sg_token = os.environ.get("SRC_ACCESS_TOKEN") or os.environ.get("SOURCEGRAPH_TOKEN")
+        sg_token = net.sourcegraph_token()
         r = net.get(f"https://sourcegraph.com/github.com/{repo}@{commit}/-/raw/{path}",
                     headers={"Authorization": f"token {sg_token}"} if sg_token else None)
         if r is not None and "text/html" in r.headers.get("Content-Type", ""):

@@ -1,5 +1,4 @@
-"""Extract completion samples (function + prompt + reference + api_call) from a source file
-(a notebook is first turned into a script by `notebook_to_script`)."""
+"""Extract completion samples (function + prompt + reference + api_call) from a source file or notebook."""
 import ast
 import json
 import logging
@@ -15,7 +14,9 @@ from llm_dep.data_collection.api_matcher import APIMatcher
 from llm_dep.utils.source_utils import extract_first_statement
 
 from .pandas_types import PandasTypes
-from .signature import _dotted
+from .signature import _dotted, walk_stmts
+
+_LINES = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z")
 
 
 class CallSiteMatcher(APIMatcher):
@@ -34,6 +35,11 @@ class CallSiteMatcher(APIMatcher):
         self.package = package            # dotted package of the file (`package_of`): resolves `from . import x`
         self.tree = None                  # stays None when the code is not valid Python 3
         self.sites: List[dict] = []
+        self._types: Dict[int, PandasTypes] = {}      # scope id -> type inference (--infer-types)
+
+    def splitlines_no_ff(self):
+        """APIMatcher.splitlines_no_ff (lines end at \\r\\n, \\r or \\n, never at form feed), ~15x faster."""
+        self.lines = _LINES.findall(self.code)
 
     def solve_imports(self):
         """APIMatcher.solve_imports, plus relative imports (`from . import utils`, `from ..utils import despine`)
@@ -41,7 +47,7 @@ class CallSiteMatcher(APIMatcher):
         super().solve_imports()
         if self.package:
             pkg = self.package.split(".")
-            for node in ast.walk(self.tree):
+            for node in walk_stmts(self.tree):
                 if not isinstance(node, ast.ImportFrom) or not node.level or node.level > len(pkg):
                     continue
                 base = ".".join(pkg[:len(pkg) - node.level + 1])
@@ -87,8 +93,7 @@ class CallSiteMatcher(APIMatcher):
         types = None
         if self.infer_types:
             scope = scope if scope is not None else root
-            cache = self.__dict__.setdefault("_types", {})
-            types = cache.get(id(scope)) or cache.setdefault(id(scope), PandasTypes(self, scope))
+            types = self._types.get(id(scope)) or self._types.setdefault(id(scope), PandasTypes(self, scope))
         for node, callee in self._candidates(root):
             if not (first_line <= node.lineno <= last_line):
                 continue
@@ -239,18 +244,20 @@ def notebook_cells(text: str) -> Optional[List[str]]:
     return out
 
 
-def _valid(code: str) -> bool:
-    """Valid Python 3, or Python 2 that the lib2to3 syntax fixers translate (handled by extract_sites)."""
+def _parses(code: str) -> bool:
     try:
         ast.parse(code)
         return True
     except (SyntaxError, ValueError, RecursionError, MemoryError):
-        pass
-    new = _py2to3(code if code.endswith("\n") else code + "\n")
-    try:
-        return new is not None and ast.parse(new) is not None
-    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return False
+
+
+def _valid(code: str) -> bool:
+    """Valid Python 3, or Python 2 that the lib2to3 syntax fixers translate (handled by extract_sites)."""
+    if _parses(code):
+        return True
+    new = _py2to3(code if code.endswith("\n") else code + "\n")
+    return new is not None and _parses(new)
 
 
 def _comment(line: str) -> str:

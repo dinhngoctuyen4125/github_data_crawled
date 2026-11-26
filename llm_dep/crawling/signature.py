@@ -1,11 +1,6 @@
-"""Check whether a concrete call (`api_call`) can bind to an API signature at a milestone.
-
-Signatures come from migration_evolution.json and may use Python syntax
-(`numpy.all(a, axis=None, *, keepdims=<no value>)`) or ATen schema syntax
-(`torch.linalg.norm(self: Tensor, ord: Scalar?=None, dim: int[1]?=None)`), so they are parsed
-with a tolerant splitter instead of `ast`.
-"""
+"""Check whether a concrete call (`api_call`) can bind to an API signature at a milestone."""
 import ast
+import collections
 import re
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -49,6 +44,8 @@ def _split_top(s: str) -> List[str]:
 
 @lru_cache(maxsize=None)
 def parse_signature(sig: str) -> Optional[Params]:
+    """Signatures may use Python syntax (`numpy.all(a, axis=None, *, keepdims=<no value>)`) or ATen
+    schema syntax (`torch.linalg.norm(self: Tensor, ord: Scalar?=None)`): a tolerant splitter, not `ast`."""
     i, j = sig.find("("), sig.rfind(")")
     if i < 0 or j < i:
         return None
@@ -132,6 +129,16 @@ def _dotted(node) -> Optional[str]:
     return ".".join(reversed(parts))
 
 
+def walk_stmts(node):
+    """ast.walk without expression subtrees (they never contain statements): the same statement nodes
+    in the same order, 3-4x faster."""
+    todo = collections.deque([node])
+    while todo:
+        node = todo.popleft()
+        todo.extend(c for c in ast.iter_child_nodes(node) if not isinstance(c, ast.expr))
+        yield node
+
+
 def _unbound_as_bound(call: Call, api: str) -> Optional[Call]:
     """`pkg.Class.method(x, ...)` passes `self` explicitly (x): the same call as `x.method(...)`, so it is checked
     with its first positional removed. Calls on an instance (`df.pad()`, `f(x).pad()`) are returned unchanged;
@@ -158,37 +165,15 @@ def _drop_self(params: Params, drop_self: bool):
     return pos, nposonly
 
 
-def binds_starred(call: Call, params: Params, drop_self: bool) -> bool:
-    """Lenient binding for calls with `*args` / `**kwargs` (as in the original O/U data): the
-    starred parts may be empty or fill any missing parameter, so the call binds unless its
-    explicit part already fails (too many positionals, unknown / duplicated / positional-only keyword)."""
-    pos, nposonly = _drop_self(params, drop_self)
-    names = [n for n, _ in pos]
-    if call.n_pos > len(pos) and not params.varargs:
-        return False
-    filled = set(names[: call.n_pos_fixed])
-    kw_names = {n for n, _ in params.kwonly}
-    for k in call.keywords:
-        if k in names[:nposonly]:
-            if not params.varkw:
-                return False
-            continue                  # goes into **kwargs; the positional-only slot is not filled
-        if k in filled:
-            return False
-        if not (k in names[nposonly:] or k in kw_names or params.varkw):
-            return False
-        filled.add(k)
-    return True
-
-
 def binds(call: Call, params: Params, drop_self: bool) -> bool:
-    if call.starred:
-        return binds_starred(call, params, drop_self)
+    """Python's argument binding. Calls with `*args` / `**kwargs` are lenient (as in the original O/U
+    data): the starred parts may be empty or fill any missing parameter, so such a call binds unless
+    its explicit part already fails (too many positionals, unknown / duplicated / positional-only keyword)."""
     pos, nposonly = _drop_self(params, drop_self)
     names = [n for n, _ in pos]
     if call.n_pos > len(pos) and not params.varargs:
         return False
-    filled = set(names[: call.n_pos])
+    filled = set(names[: call.n_pos_fixed])     # == n_pos without `*args`
     kw_names = {n for n, _ in params.kwonly}
     for k in call.keywords:
         if k in names[:nposonly]:
@@ -197,15 +182,14 @@ def binds(call: Call, params: Params, drop_self: bool) -> bool:
             continue                  # goes into **kwargs; the positional-only slot is not filled
         if k in filled:
             return False
-        if k in names[nposonly:] or k in kw_names:
-            filled.add(k)
-        elif not params.varkw:
+        known = k in names[nposonly:] or k in kw_names
+        if not (known or params.varkw):
             return False
-    if any(not d and n not in filled for n, d in pos):
-        return False
-    if any(not d and n not in filled for n, d in params.kwonly):
-        return False
-    return True
+        if known or call.starred:
+            filled.add(k)
+    if call.starred:
+        return True
+    return all(d or n in filled for n, d in pos + params.kwonly)
 
 
 def compatible(api_call: str, api: str, state: Optional[ApiState], lenient_starred: bool = False) -> Optional[bool]:

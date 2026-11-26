@@ -21,14 +21,10 @@ class Resolution:
     commit_date: Optional[str] = None
     bounded: bool = False                # the declaration has both a lower and an upper bound
 
-    def to_json(self):
-        return asdict(self)
-
 
 @dataclass
 class Placement:
     status: str                  # ok | ambiguous | before_path
-    milestone: Optional[str]     # first milestone v1 (kept for compatibility)
     version_range: List[str]     # [min, max] of candidate versions used
     milestones: List[str] = field(default_factory=list)   # every milestone the declaration spans
 
@@ -45,14 +41,14 @@ class VersionResolver:
         if cached is not None:
             return Resolution(**cached)
         res = self._resolve(lib, repo, commit, source_path)
-        self.gh.cache.put_json(key, res.to_json())
+        self.gh.cache.put_json(key, asdict(res))
         return res
 
     def _resolve(self, lib, repo, commit, source_path) -> Resolution:
         tree = self.gh.tree(repo, commit)
         date = self.gh.commit_date(repo, commit) if self.use_commit_date else None
         releases = self.releases.versions(lib, before=date)
-        for _, files in deps.candidate_files(source_path, tree).items():
+        for files in deps.candidate_files(source_path, tree).values():
             specs = []
             for f in files:
                 specs += deps.parse_file(f, self.gh.raw(repo, commit, f), PACKAGES[lib])
@@ -82,18 +78,18 @@ def place(res: Resolution, path: Path_, mode: str = "strict", api: Optional[str]
     API of the pair changed); the sample then belongs to every spanned milestone.
     latest: use the newest allowed version (what pip would pick at commit time)."""
     if res.status != "ok":
-        return Placement(res.status, None, [])
+        return Placement(res.status, [])
     if require_bounded and not res.bounded:     # e.g. `pandas>=0.24` or bare `pandas`
-        return Placement("unbounded", None, [])
+        return Placement("unbounded", [])
     vers = sorted(Version(v) for v in res.candidates)
     rng = [str(vers[0]), str(vers[-1])]
     if mode == "latest":
         ms = path.milestone_for(vers[-1])
-        return Placement("ok" if ms else "before_path", ms, rng, [ms] if ms else [])
+        return Placement("ok" if ms else "before_path", rng, [ms] if ms else [])
     spanned = {path.milestone_for(v) for v in vers}
     if None in spanned:            # part of the range lies before the path: API state unknown there
-        return Placement("before_path" if len(spanned) == 1 else "ambiguous", None, rng)
+        return Placement("before_path" if len(spanned) == 1 else "ambiguous", rng)
     ordered = sorted(spanned, key=Version)
     if len(ordered) > 1 and (api is None or not path.unchanged_between(api, ordered, signature_only)):
-        return Placement("ambiguous", None, rng)
-    return Placement("ok", ordered[0], rng, ordered)
+        return Placement("ambiguous", rng)
+    return Placement("ok", rng, ordered)

@@ -21,7 +21,7 @@ PACKAGES = {
     "transformers": ["transformers"],
 }
 # Distribution whose PyPI release list is used for each library.
-PYPI_NAME = {"scikit-learn": "scikit-learn", "pytorch": "torch"}
+PYPI_NAME = {"pytorch": "torch"}
 
 USABLE = ("active", "deprecated")
 # Change types that affect whether a call is valid (signature or lifecycle); the others

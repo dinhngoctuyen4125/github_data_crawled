@@ -66,7 +66,7 @@
   - Nguyên nhân (theo `data/crawl_tensorflow.log`): lệnh #3 từng chạy **hai tiến trình song song**. Có 890 dòng log lặp lại, hai dòng `tensorflow done` cùng lúc 07:13:53 ngày 25. Mỗi mẫu bị ghi hai lần liền nhau, cùng repo và path.
   - pytorch không bị trùng.
 
-## Tiến độ hiện tại (2026-11-26 13:28, đợt tensorflow ở máy này đang chạy)
+## Tiến độ hiện tại (2026-11-26 22:00, đợt tensorflow ở máy này đã chạy xong)
 | Thư viện | Tập | Ô cần lấp | Ô đã lấp đủ | Lượt lấp ô / cần |
 |---|---|---|---|---|
 | numpy | O | 21 | 21 (100%) | 18,827/18,827 (100%) |
@@ -83,15 +83,23 @@
 | transformers | U | 218 | 218 (100%) | 603/603 (100%) |
 | pytorch | O | 129 | 60 (47%) | 46,112/88,964 (51.8%) |
 | pytorch | U | 61 | 61 (100%) | 6,573/6,573 (100%) |
-| tensorflow | O | 349 | 178 (51%) | 27,157/68,089 (39.9%) |
+| tensorflow | O | 349 | 178 (51%) | 27,269/68,089 (40.0%) |
 | tensorflow | U | 39 | 33 (85%) | 290/842 (34.4%) |
 
-- Chỉ tensorflow O tăng. Sau khi bỏ trùng là 8.441 mẫu và 26.977 lượt; bây giờ là 8.483 mẫu (+42) và 27.157 lượt (+180). Số ô đã lấp đủ không đổi.
-- Bước 1 (`--cached-only --reprocess`): lệnh #3 nhận 15 mẫu, nhờ luật alias bằng phép gán; lệnh #2 nhận 0.
-- Bước 2, lệnh #3 (tìm mới trên GitHub, đang chạy):
-  - `all_variables` 4 mẫu, `initialize_all_variables` 23, `arg_min` 0, `initializers.uniform_unit_scaling` 0, bốn API `mixed_precision.*LossScale` 0;
-  - khoảng 10.000 file mới, phần lớn là `vendored_path` hoặc `no_call_site`.
-- Truy vấn mới chạy chậm: mỗi truy vấn khớp 800–1.700 file, phải chia theo `size:` và lấy từng trang. Mỗi request cách nhau 20 giây, nên một truy vấn mất 5–25 phút.
+Kết quả đợt tensorflow ở máy này (2026-11-26, 10:59 → 21:58, có khởi động lại vài lần, mỗi lần đều chạy tiếp từ cache):
+- Chỉ tensorflow O tăng: 8.441 → **8.495 mẫu (+54)**, 26.977 → **27.269 lượt (+292)**. Số ô đã lấp đủ vẫn là 178. Tensorflow U không đổi.
+- Bước đọc lại cache (`--cached-only --reprocess`):
+  - lệnh #3 nhận 15 mẫu, nhờ luật alias bằng phép gán: `to_double` 7, `initialize_all_variables` 3, `to_bfloat16` 2, `compat.v1.to_double`, `all_variables`, `arg_min` mỗi API 1;
+  - lệnh #2 nhận 0.
+- Lệnh #3 tìm mới (GitHub, xong 21:38): 34 mẫu.
+  - Có mẫu: `initialize_all_variables` 23, `all_variables` 4, `to_int64` 4, `saved_model.load` 2, `train.experimental.DynamicLossScale` 1.
+  - 0 mẫu: các API `compat.v1.*` còn lại, dù mỗi API có 1.000–9.000 file. Gần như toàn bộ là `vendored_path` (bản sao mã nguồn TF) hoặc `no_call_site`.
+  - Tensorflow U `saved_model.load`: 146 mẫu `cell_full`; hai ô 1.12/1.13.1 vẫn không khớp signature.
+- Lệnh #2 tìm mới (Sourcegraph, xong 21:58): 4 mẫu, đều từ `compat.v1.saved_model.load`. Mỗi API chỉ có khoảng 10–30 file.
+- Mẫu thứ 54 đến từ một lần chạy bị dừng giữa chừng, nên log không in dòng tổng kết của lần đó.
+- `report --export` đã chạy lúc 21:58: `manual_reviews/API_MIGRATION_COUNTS_AFTER.md`, `data/tensorflow/{O,U}_crawled.json`.
+- Truy vấn GitHub mới chạy chậm: mỗi truy vấn khớp 800–9.000 file, phải chia theo `size:` và lấy từng trang. Mỗi request cách nhau 20 giây, nên một truy vấn mất 5–25 phút; `"saved_model.load"` mất khoảng 1 giờ.
+- Kết luận: các truy vấn `compat.v1` và `"<module>.<name>"` đã chạy hết, gần như cạn. Crawl thêm theo hướng truy vấn này cho tensorflow khó có thêm mẫu.
 
 ## Ô khả thi (API có ở milestone đó) vẫn chưa có mẫu nào (BEFORE + crawl = 0)
 - Mọi tập U và các thư viện numpy, pandas, scikit-learn, scipy, seaborn, pytorch: không còn ô nào như vậy.
@@ -109,7 +117,7 @@
   | [90] `compat.v1.train.experimental.FixedLossScale` | 10 |
   | [101] `mixed_precision.experimental.FixedLossScale` | 5 |
 
-- Lệnh #3 mới đã chạy xong [70], [73], [74], [75] mà vẫn không có mẫu. Còn [83], [84], [90] và lệnh #2 mới chưa chạy tới.
+- Sau khi chạy xong cả lệnh #3 và #2 mới, danh sách này không đổi: vẫn 67 ô (transformers 4, tensorflow 63). Đây là các API cũ rất ít người gọi trực tiếp.
 - Cách tính: script tạm `C:\Users\tuyen\AppData\Local\Temp\claude\dc8dc83bc3ce8279\d4700443-921b-42e6-b009-8a7bd8f153ef\scratchpad\zero_cells.py`. Script đếm mọi `assignments` trong `samples.jsonl` cộng với BEFORE, chỉ xét các ô `feasible`.
 
 Cách tính bảng:
@@ -170,15 +178,8 @@ Cách tính bảng:
 - Thêm các dòng lệnh cho pytorch nếu người dùng cần.
 
 ## Trạng thái file
-- `run_others.ps1` hiện chứa đợt tensorflow chạy ở **máy này**, với `--cache cache_tensorflow`. **Đang chạy** (13:28 ngày 2026-11-26):
-  - bước 1 đã xong;
-  - bước 2, lệnh #3 đang ở `compat.v1.random.multinomial`. Còn khoảng 10 API GitHub và 18 truy vấn Sourcegraph mới. Người dùng chọn để chạy tiếp.
-  - Nếu bị dừng giữa chừng, chạy lại đúng lệnh đó sẽ tiếp tục từ chỗ dừng.
-
-  Các bước trong script:
-  1. Lệnh #3 rồi #2 với `--cached-only --reprocess`: đọc lại bằng luật mới, lấp lại các ô bị trống ra sau khi bỏ trùng. Không gọi API tìm kiếm.
-  2. Lệnh #3 (`--gh-interval 20`) rồi #2 với tìm kiếm mới: chỉ các truy vấn mới được gửi đi.
-  3. `report --export`.
-- Chạy từng lệnh một, và đảm bảo không máy nào khác đang crawl bằng cùng token.
-- Chạy xong thì lập bảng tiến độ và so với bảng ở trên.
+- `run_others.ps1` chứa đợt tensorflow ở **máy này**, với `--cache cache_tensorflow`. **Đã chạy xong** (21:58 ngày 2026-11-26, kết quả ở phần tiến độ).
+  - Bước đọc lại cache đã được bỏ khỏi script, vì nó đã chạy rồi và mất khoảng 25 phút.
+  - Script còn lệnh #3 tìm mới, lệnh #2 tìm mới và `report --export`. Chạy lại thì mọi phần đã xong đều được bỏ qua ngay.
+- Chạy từng lệnh một, và đảm bảo không máy nào khác đang crawl bằng cùng token. Ctrl+C trong PowerShell dừng cả script.
 - Đợt kế tiếp thì thay nội dung file bằng lệnh mới.

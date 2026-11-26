@@ -90,15 +90,17 @@ class SearchUnavailable(RuntimeError):
 
 
 class Sourcegraph:
-    def __init__(self, cache: net.DiskCache, min_interval: float = 5.0, cached_only: bool = False):
+    def __init__(self, cache: net.DiskCache, min_interval: float = 5.0, cached_only: bool = False,
+                 notebooks: bool = False):
         self.cache = cache
         self.cached_only = cached_only       # never send new searches (re-evaluate cached ones only)
+        self.lang = r"file:\.ipynb$" if notebooks else "lang:python"     # notebooks: search .ipynb files
         self.token = os.environ.get("SRC_ACCESS_TOKEN") or os.environ.get("SOURCEGRAPH_TOKEN")
         self.min_interval = min_interval     # seconds between two uncached searches
         self._last = 0.0
 
     def search(self, query: str, count: int) -> List[Hit]:
-        full = f"context:global lang:python type:file select:file count:{count} {EXCLUDE} {query}"
+        full = f"context:global {self.lang} type:file select:file count:{count} {EXCLUDE} {query}"
         key = f"sg:{full}"
         cached = self.cache.get_json(key)
         if cached is not None:

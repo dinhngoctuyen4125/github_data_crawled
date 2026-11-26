@@ -42,21 +42,23 @@ class SliceRejected(SliceFailed):
     """Unexpected 4xx for one query (slice): skip it without splitting, never cache it."""
 
 
-def gh_queries(api: str, method_only: bool = False) -> List[str]:
-    """Keyword queries for calls of `api` in GitHub search syntax (most precise first)."""
+def gh_queries(api: str, method_only: bool = False, notebooks: bool = False) -> List[str]:
+    """Keyword queries for calls of `api` in GitHub search syntax (most precise first);
+    notebooks: search `.ipynb` files instead of Python files."""
+    lang = "extension:ipynb" if notebooks else "language:python"
     parts = api.split(".")
     top = parts[0]
     names = [api] + [f"{alias}{api[len(top):]}" for alias in MODULE_ALIASES.get(top, [])]
-    queries = [f'"{n}" language:python' for n in names]
+    queries = [f'"{n}" {lang}' for n in names]
     if len(parts) >= 2:
         if len(parts) >= 3 and parts[-2][:1].isupper() and not parts[-1][:1].isupper():   # method
-            queries.append(f'"{".".join(parts[:-2])}" {parts[-2]} {parts[-1]} language:python')
+            queries.append(f'"{".".join(parts[:-2])}" {parts[-2]} {parts[-1]} {lang}')
             if method_only:
-                queries.append(f'"{top}" {parts[-1]} language:python')
+                queries.append(f'"{top}" {parts[-1]} {lang}')
         else:                                                                          # function / class
-            queries.append(f'"{".".join(parts[:-1])}" {parts[-1]} language:python')
+            queries.append(f'"{".".join(parts[:-1])}" {parts[-1]} {lang}')
             if len(parts) >= 3:                                                        # `from pkg import module; module.name(`
-                queries.append(f'"{parts[-2]}.{parts[-1]}" language:python')
+                queries.append(f'"{parts[-2]}.{parts[-1]}" {lang}')
     return list(dict.fromkeys(queries))
 
 

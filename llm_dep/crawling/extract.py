@@ -1,6 +1,9 @@
-"""Extract completion samples (function + prompt + reference + api_call) from a source file."""
+"""Extract completion samples (function + prompt + reference + api_call) from a source file
+(a notebook is first turned into a script by `notebook_to_script`)."""
 import ast
+import json
 import logging
+import re
 import threading
 import warnings
 from typing import Dict, Iterable, List, Optional
@@ -191,6 +194,77 @@ def _py2to3(code: str) -> Optional[str]:
         return str(_py2.tool.refactor_string(code, "<crawled>"))      # code ends with "\n" (extract_sites)
     except Exception:
         return None
+
+
+# IPython syntax that is not Python: `%magic`, `!shell`, `obj?`, `x = !cmd`, `x = %magic`.
+_MAGIC = re.compile(r"^\s*([%!]|\?\??\w|[\w.]+\?\??\s*$|[\w.,\s]+=\s*[%!])")
+_LINE_CELL_MAGICS = {"time", "timeit", "capture", "prun"}     # `%%time` etc.: the rest of the cell is Python
+
+
+def notebook_cells(text: str) -> Optional[List[str]]:
+    """Sources of the code cells of a notebook (nbformat 4: `cells`/`source`, nbformat 3: `worksheets`/`input`);
+    None if `text` is not a notebook."""
+    try:
+        nb = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(nb, dict):
+        return None
+    cells = nb.get("cells")
+    if cells is None:
+        cells = [c for ws in nb.get("worksheets") or [] if isinstance(ws, dict) for c in ws.get("cells") or []]
+    if not isinstance(cells, list):
+        return None
+    out = []
+    for c in cells:
+        if not isinstance(c, dict) or c.get("cell_type") != "code":
+            continue
+        src = c.get("source", c.get("input", ""))
+        out.append("".join(src) if isinstance(src, list) else str(src or ""))
+    return out
+
+
+def _valid(code: str) -> bool:
+    """Valid Python 3, or Python 2 that the lib2to3 syntax fixers translate (handled by extract_sites)."""
+    try:
+        ast.parse(code)
+        return True
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        pass
+    new = _py2to3(code if code.endswith("\n") else code + "\n")
+    try:
+        return new is not None and ast.parse(new) is not None
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return False
+
+
+def _comment(line: str) -> str:
+    indent = len(line) - len(line.lstrip())
+    return f"{line[:indent]}# {line[indent:]}"
+
+
+def notebook_to_script(text: str) -> Optional[str]:
+    """The code cells of a notebook as one script, cells separated by a blank line. IPython-only lines
+    (magics, shell escapes, `obj?`) are turned into comments; a cell that is still not valid Python (an
+    unfinished cell, or a non-Python cell magic such as `%%bash`) is commented out whole, so that one bad cell
+    does not lose the whole notebook. None if `text` is not a notebook."""
+    cells = notebook_cells(text)
+    if cells is None:
+        return None
+    parts = []
+    for src in cells:
+        lines = src.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n").split("\n")
+        if not any(l.strip() for l in lines):
+            continue
+        head = lines[0].strip()
+        if head.startswith("%%") and head[2:].split(" ", 1)[0] not in _LINE_CELL_MAGICS:
+            lines = [_comment(l) for l in lines]
+        else:
+            lines = [_comment(l) if _MAGIC.match(l) else l for l in lines]
+            if not _valid("\n".join(lines)):
+                lines = [_comment(l) if l.strip() else l for l in lines]
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts) + "\n"
 
 
 def package_of(path: Optional[str], tops: Iterable[str]) -> Optional[str]:

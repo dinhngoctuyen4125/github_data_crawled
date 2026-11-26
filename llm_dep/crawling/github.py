@@ -1,11 +1,23 @@
 """Read files, trees and commit dates of a GitHub repository at a fixed commit (cached)."""
 import datetime as dt
+import json
 import os
 from typing import List, Optional
 
 from . import net
 
 MISSING = "\x00missing"
+
+
+def strip_notebook(text: str) -> Optional[str]:
+    """A notebook reduced to its code cells' sources (outputs, execution counts, metadata and markdown cells
+    dropped), as nbformat 4 JSON, so the cache keeps only the code; None if `text` is not a notebook."""
+    from .extract import notebook_cells           # lazy: extract imports the original study's matcher
+    cells = notebook_cells(text)
+    if cells is None:
+        return None
+    return json.dumps({"nbformat": 4, "nbformat_minor": 0, "metadata": {},
+                       "cells": [{"cell_type": "code", "source": src} for src in cells]}, ensure_ascii=False)
 
 
 class GitHub:
@@ -42,6 +54,8 @@ class GitHub:
             if r is not None and not sg_only:
                 self.cache.put(f"sgonly:{repo}@{commit}", "1")
         text = r.content.decode("utf-8", errors="replace") if r is not None else None
+        if text is not None and path.endswith(".ipynb"):
+            text = strip_notebook(text)
         self.cache.put(key, MISSING if text is None else text)
         return text
 

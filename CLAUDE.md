@@ -33,6 +33,7 @@ python -m llm_dep.crawling.run --libs numpy --plan                       # print
 python -m llm_dep.crawling.run --libs numpy                              # Sourcegraph, assign by dependency
 python -m llm_dep.crawling.run --libs numpy --assign signature --cached-only --reprocess   # re-read cached files
 python -m llm_dep.crawling.run --libs numpy --source github --assign signature --search-limit 5000 --wait-on-block 30
+python -m llm_dep.crawling.run --libs scikit-learn --kinds O --source github --assign signature --notebooks --search-limit 20000 --wait-on-block 30 --gh-interval 20
 python -m llm_dep.crawling.report --export                               # AFTER.md + data/<lib>/{O,U}_crawled.json
 ```
 
@@ -57,7 +58,12 @@ call sites → assign library versions → accept the sample only for (mapping, 
   earliest matching call per function so the prompt never contains the target API. It also handles indexers
   (`df.loc[...]`), pandas type inference (`pandas_types.py`), `Cls.from_pretrained`, relative imports inside copies
   of the library (package inferred from the file path), and Python 2 files (lib2to3 syntax fixers only, text mapped
-  back 1:1 to original lines).
+  back 1:1 to original lines). Like the original study, a sample is a function/method or a block of up to 5
+  module-level statements (`match_script_stmts`).
+- **Notebooks** (`--notebooks`): searches `.ipynb` files instead (GitHub `extension:ipynb`, Sourcegraph
+  `file:\.ipynb$`). `notebook_to_script` joins the code cells (nbformat 3 and 4) into one script, comments out IPython
+  magics / shell lines and cells that still do not parse; `.ipynb_checkpoints/` copies are skipped. The cache keeps
+  only the code cells (`github.strip_notebook`).
 - **Version assignment** — two branches sharing one `samples.jsonl` and one quota:
   - `--assign dependency`: version from the repo's dependency files at that commit (`deps.py`, `versions.py`,
     `pypi.py` release dates), must fall in `[v1, v2)` of the path, plus a signature check;

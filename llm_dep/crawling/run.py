@@ -13,6 +13,7 @@ Two assignment branches share one samples.jsonl and one quota:
       Dependency queries are skipped; the dependency is still recorded when it resolves.
     python -m llm_dep.crawling.run --libs numpy --assign signature --cached-only   # re-use crawled files
     python -m llm_dep.crawling.run --libs numpy --assign signature                 # crawl more
+    python -m llm_dep.crawling.run --libs numpy --assign signature --notebooks     # search .ipynb files
 
 Tokens (env or .env): SRC_ACCESS_TOKEN (Sourcegraph), GITHUB_TOKEN (tree listing + commit dates;
 without it dependency files are probed at fixed paths and commit dates are unknown).
@@ -33,7 +34,7 @@ from packaging.version import Version
 
 from . import net
 from .evolution import LIBS, USABLE, Evolution
-from .extract import extract_sites
+from .extract import extract_sites, notebook_to_script
 from .github import GitHub
 from .github_search import GitHubSearch, gh_queries
 from .pypi import Releases
@@ -41,6 +42,9 @@ from .quota import Quota, parse_counts_md
 from .signature import compatible, parse_call
 from .sourcegraph import VENDORED, SearchUnavailable, Sourcegraph, api_queries, dependency_predicate, minor_groups
 from .versions import VersionResolver, place
+
+
+CHECKPOINT = re.compile(r"(^|/)\.ipynb_checkpoints/")
 
 
 def func_key(function: str) -> str:
@@ -65,7 +69,8 @@ class Crawler:
             extra[p.library] += p.milestones
         self.releases = Releases(cache, extra)
         self.gh = GitHub(cache)
-        self.sg = Sourcegraph(cache, min_interval=args.sg_interval, cached_only=args.cached_only)
+        self.sg = Sourcegraph(cache, min_interval=args.sg_interval, cached_only=args.cached_only,
+                              notebooks=args.notebooks)
         self.searcher = self.sg if args.source == "sourcegraph" else GitHubSearch(cache, min_interval=args.gh_interval, cached_only=args.cached_only)
         self.resolver = VersionResolver(self.gh, self.releases, use_commit_date=not args.no_commit_date)
         self.quota = Quota(self.ev, parse_counts_md(Path(args.before), self.ev), cap=args.cap, baseline=args.baseline)
@@ -163,7 +168,7 @@ class Crawler:
         """Dependency-targeted queries for open cells first (oldest first), then broad queries."""
         method_only = self.args.infer_types and lib == "pandas"
         if self.args.source == "github":            # no repo:has.file on GitHub: API-name queries only
-            return gh_queries(target, method_only=method_only)
+            return gh_queries(target, method_only=method_only, notebooks=self.args.notebooks)
         base = api_queries(target, method_only=method_only)
         targeted, seen = [], set()
         releases = self.releases.versions(lib)
@@ -188,9 +193,16 @@ class Crawler:
         try:
             if not self.args.include_vendored and VENDORED.search(hit.path):
                 return "vendored_path", [], None
+            notebook = hit.path.endswith(".ipynb")
+            if notebook and CHECKPOINT.search(hit.path):     # Jupyter's autosaved copy of another notebook
+                return "notebook_checkpoint", [], None
             code = self.gh.raw(hit.repo, hit.commit, hit.path, fallback=True)
             if code is None:
                 return "download_failed", [], None
+            if notebook:
+                code = notebook_to_script(code)
+                if code is None:
+                    return "not_a_notebook", [], None
             sites = [s for s in extract_sites(code, [target], self.indexer_apis & {target},
                                                 infer_types=self.args.infer_types and lib == "pandas",
                                                 from_pretrained=self.args.allow_from_pretrained, path=hit.path)
@@ -365,6 +377,9 @@ def main():
                     help="search engine: sourcegraph (default) or GitHub code search (needs GITHUB_TOKEN, "
                          "API-name queries only, ~10 searches/min)")
     ap.add_argument("--gh-interval", type=float, default=6.5, help="min seconds between two GitHub code searches")
+    ap.add_argument("--notebooks", action="store_true",
+                    help="search Jupyter notebooks (.ipynb) instead of Python files: the code cells are joined into "
+                         "one script (IPython magics commented out), samples are taken from it as from a .py file")
     ap.add_argument("--workers", type=int, default=8, help="parallel downloads / dependency resolutions")
     ap.add_argument("--max-queries", type=int, default=0, help="max queries per target API (0 = all)")
     ap.add_argument("--infer-types", action="store_true",

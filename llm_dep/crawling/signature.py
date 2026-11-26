@@ -7,7 +7,7 @@ with a tolerant splitter instead of `ast`.
 """
 import ast
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import List, Optional, Tuple
 
@@ -87,6 +87,7 @@ class Call:
     star: bool = False           # has `*args`
     dstar: bool = False          # has `**kwargs`
     n_pos_fixed: int = 0         # explicit positionals before the first `*args` (their slots are known)
+    receiver: Optional[str] = None   # dotted name before `.method` (`pd.DataFrame` in `pd.DataFrame.pad(x)`)
 
     @property
     def starred(self) -> bool:
@@ -115,7 +116,31 @@ def parse_call(src: str, allow_starred: bool = False) -> Optional[Call]:
     first_star = next((i for i, a in enumerate(node.args) if isinstance(a, ast.Starred)), len(node.args))
     return Call(sum(not isinstance(a, ast.Starred) for a in node.args),
                 [k.arg for k in node.keywords if k.arg is not None],
-                star=star, dstar=dstar, n_pos_fixed=first_star)
+                star=star, dstar=dstar, n_pos_fixed=first_star,
+                receiver=_dotted(node.func.value) if isinstance(node.func, ast.Attribute) else None)
+
+
+def _dotted(node) -> Optional[str]:
+    """`a.b.c` for a plain Name/Attribute chain, None otherwise (e.g. `f(x).g`)."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def _unbound_as_bound(call: Call, api: str) -> Optional[Call]:
+    """`pkg.Class.method(x, ...)` passes `self` explicitly (x): the same call as `x.method(...)`, so it is checked
+    with its first positional removed. Calls on an instance (`df.pad()`, `f(x).pad()`) are returned unchanged;
+    None for an unbound call without any positional (no `self`)."""
+    if not is_method(api) or not call.receiver or call.receiver.split(".")[-1] != api.split(".")[-2]:
+        return call
+    if call.n_pos_fixed >= 1:
+        return replace(call,n_pos=call.n_pos - 1, n_pos_fixed=call.n_pos_fixed - 1)
+    return call if call.star else None          # `*args` may supply `self`
 
 
 def is_method(api: str) -> bool:
@@ -206,6 +231,9 @@ def compatible(api_call: str, api: str, state: Optional[ApiState], lenient_starr
             return call.n_pos <= n_max and kws_ok
         return call.n_pos in (n_in, n_max) and kws_ok
     if call.subscript:
+        return False
+    call = _unbound_as_bound(call, api)
+    if call is None:
         return False
     drop_self = is_method(api) or api.split(".")[-1][:1].isupper()   # bound method or class constructor
     for sig in state.signatures:
